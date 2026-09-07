@@ -234,7 +234,7 @@ class MiniMaxTrimPrefixLatentNode:
         return {
             "required": {
                 "latent": ("LATENT",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1, "tooltip": "手动指定剔除前缀帧数 (0 表示自动根据 session/cache_config 计算)"}),
+                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1}),
             },
             "optional": {
                 "session": ("MINIMAX_SESSION",),
@@ -244,8 +244,8 @@ class MiniMaxTrimPrefixLatentNode:
             }
         }
 
-    RETURN_TYPES = ("LATENT", "AUDIO")
-    RETURN_NAMES = ("trimmed_latent", "trimmed_audio")
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("trimmed_latent",)
     FUNCTION = "trim"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
@@ -258,7 +258,7 @@ class MiniMaxTrimPrefixLatentNode:
         session: Optional[LongVideoSession] = None,
         cache_config: Optional[KVCacheConfig] = None,
         **kwargs
-    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    ) -> Tuple[Dict[str, Any]]:
         target_latent = latent if latent is not None else video_latent
         if target_latent is None:
             raise ValueError("MiniMaxTrimPrefixLatentNode requires 'latent' input.")
@@ -267,7 +267,7 @@ class MiniMaxTrimPrefixLatentNode:
         if v is None:
             v = target_latent.get("samples")
         if v is None:
-            return (target_latent, audio)
+            return (target_latent,)
 
         # Determine how many latent steps to trim
         trim_steps = 0
@@ -312,7 +312,7 @@ class MiniMaxTrimPrefixLatentNode:
             else:
                 out_audio = audio
 
-        return (out_latent, out_audio)
+        return (out_latent,)
 
 
 class MiniMaxLongVideoStitcherNode:
@@ -327,9 +327,9 @@ class MiniMaxLongVideoStitcherNode:
         return {
             "required": {
                 "current_latent": ("LATENT",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1, "tooltip": "手动指定切除重叠帧数 (0 表示自动根据 session/cache_config 计算)"}),
-                "latent_blend_steps": ("INT", {"default": 2, "min": 0, "max": 8, "step": 1, "tooltip": "潜空间余弦 S 曲线混合步数 (推荐 2 步)"}),
-                "audio_crossfade_ms": ("INT", {"default": 50, "min": 0, "max": 500, "step": 10, "tooltip": "音频等功率交叉淡入淡出毫秒数"}),
+                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1}),
+                "latent_blend_steps": ("INT", {"default": 2, "min": 0, "max": 8, "step": 1}),
+                "audio_crossfade_ms": ("INT", {"default": 50, "min": 0, "max": 500, "step": 10}),
             },
             "optional": {
                 "previous_latent": ("LATENT",),
@@ -342,8 +342,8 @@ class MiniMaxLongVideoStitcherNode:
             }
         }
 
-    RETURN_TYPES = ("LATENT", "LATENT", "AUDIO", "AUDIO")
-    RETURN_NAMES = ("stitched_latent", "trimmed_current_latent", "stitched_audio", "trimmed_current_audio")
+    RETURN_TYPES = ("LATENT", "LATENT")
+    RETURN_NAMES = ("stitched_latent", "trimmed_current_latent")
     FUNCTION = "stitch"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
@@ -454,7 +454,7 @@ class MiniMaxLongVideoStitcherNode:
                     stitched_w = audio_equal_power_crossfade(w1, w2, crossfade_samples=cross_samples)
                     out_stitched_audio = {"waveform": stitched_w, "sample_rate": sr}
 
-        return (out_stitched_latent, out_trimmed_latent, out_stitched_audio, out_trimmed_audio)
+        return (out_stitched_latent, out_trimmed_latent)
 
 
 class MiniMaxCacheMonitorNode:
