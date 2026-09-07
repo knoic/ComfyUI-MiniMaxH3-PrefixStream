@@ -156,6 +156,14 @@ def _make_block_patch(
         # Mode 2: Denoising Mode (Step-1 Dynamic Capture & Step 2..N Reuse)
         # -------------------------------------------------------------
         if mode == "denoise":
+            # If ComfyUI CUDA graph compiler is active, pass through to avoid graph replay aborts
+            try:
+                import comfy.model_prefetch
+                if comfy.model_prefetch.malloc_graph_enabled(args["img"].device):
+                    return block_wrap(args)
+            except Exception:
+                pass
+
             # Identify condition token bounds (cond & cond_audio).
             # Text tokens (0..text_len) MUST NOT be cached, as their timestep t_v = 1 - sigma varies every step.
             layout = args.get("layout")
@@ -179,34 +187,38 @@ def _make_block_patch(
             # Branch 2A: Step 1 Dynamic Capture (Cache is empty)
             if not cache_manager.has_cache(layer_idx):
                 def capture_attention(h_in, rope_freqs=None, transformer_options={}):
-                    s = h_in.shape[0]
-                    q, k, v = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
-                    q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
+                    try:
+                        s = h_in.shape[0]
+                        q, k, v = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
+                        q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
 
-                    # Extract ONLY invariant condition Key and Value (cond_start..cond_end)
-                    k_cond = k[:, :, cond_start:cond_end, :]
-                    v_cond = v[:, :, cond_start:cond_end, :]
+                        # Extract ONLY invariant condition Key and Value (cond_start..cond_end)
+                        k_cond = k[:, :, cond_start:cond_end, :]
+                        v_cond = v[:, :, cond_start:cond_end, :]
 
-                    # Store in cache manager (quantizes & pins if configured)
-                    cache_manager.set_rolling_kv(layer_idx, k_cond, v_cond)
-                    if layer_idx == 0:
-                        cache_manager.captured_tokens = cond_end - cond_start
-                        logger.info(
-                            "[Prefix KV Cache] Step 1: Captured %d invariant condition tokens into 50-layer DiT cache (%s, %s).",
-                            cache_manager.captured_tokens,
-                            cache_manager.config.cache_dtype.upper(),
-                            cache_manager._resolved_device_mode
+                        # Store in cache manager (quantizes & pins if configured)
+                        cache_manager.set_rolling_kv(layer_idx, k_cond, v_cond)
+                        if layer_idx == 0:
+                            cache_manager.captured_tokens = cond_end - cond_start
+                            logger.info(
+                                "[Prefix KV Cache] Step 1: Captured %d invariant condition tokens into 50-layer DiT cache (%s, %s).",
+                                cache_manager.captured_tokens,
+                                cache_manager.config.cache_dtype.upper(),
+                                cache_manager._resolved_device_mode
+                            )
+
+                        # Full standard attention on Step 1
+                        out = asymmetric_cached_attention(
+                            q=q,
+                            k_cached=k,
+                            v_cached=v,
+                            num_heads=attn_mod.heads,
+                            transformer_options=transformer_options
                         )
-
-                    # Full standard attention on Step 1
-                    out = asymmetric_cached_attention(
-                        q=q,
-                        k_cached=k,
-                        v_cached=v,
-                        num_heads=attn_mod.heads,
-                        transformer_options=transformer_options
-                    )
-                    return attn_mod.out_proj(out)
+                        return attn_mod.out_proj(out)
+                    except Exception as err:
+                        logger.warning("[Prefix KV Cache] Step 1 fallback in layer %d: %s", layer_idx, err)
+                        return attn_mod(h_in, rope_freqs=rope_freqs, transformer_options=transformer_options)
 
                 args_with_attn = dict(args)
                 args_with_attn["attention"] = capture_attention
@@ -226,29 +238,33 @@ def _make_block_patch(
                     )
 
             def cached_target_attention(h_in, rope_freqs=None, transformer_options={}):
-                s = h_in.shape[0]
-                q, k_dyn, v_dyn = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
-                q, k_dyn, v_dyn = _apply_rope_and_norm(attn_mod, q, k_dyn, v_dyn, rope_freqs)
+                try:
+                    s = h_in.shape[0]
+                    q, k_dyn, v_dyn = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
+                    q, k_dyn, v_dyn = _apply_rope_and_norm(attn_mod, q, k_dyn, v_dyn, rope_freqs)
 
-                # Fetch cached invariant condition KV
-                k_cond, v_cond = cache_manager.get_combined_kv(
-                    layer_idx=layer_idx,
-                    target_device=q.device,
-                    compute_dtype=q.dtype
-                )
+                    # Fetch cached invariant condition KV
+                    k_cond, v_cond = cache_manager.get_combined_kv(
+                        layer_idx=layer_idx,
+                        target_device=q.device,
+                        compute_dtype=q.dtype
+                    )
 
-                # Concatenate dynamically updated text, cached condition, and dynamically updated target
-                k_total = torch.cat([k_dyn[:, :, :cond_start, :], k_cond, k_dyn[:, :, cond_end:, :]], dim=2)
-                v_total = torch.cat([v_dyn[:, :, :cond_start, :], v_cond, v_dyn[:, :, cond_end:, :]], dim=2)
+                    # Concatenate dynamically updated text, cached condition, and dynamically updated target
+                    k_total = torch.cat([k_dyn[:, :, :cond_start, :], k_cond, k_dyn[:, :, cond_end:, :]], dim=2)
+                    v_total = torch.cat([v_dyn[:, :, :cond_start, :], v_cond, v_dyn[:, :, cond_end:, :]], dim=2)
 
-                out = asymmetric_cached_attention(
-                    q=q,
-                    k_cached=k_total,
-                    v_cached=v_total,
-                    num_heads=attn_mod.heads,
-                    transformer_options=transformer_options
-                )
-                return attn_mod.out_proj(out)
+                    out = asymmetric_cached_attention(
+                        q=q,
+                        k_cached=k_total,
+                        v_cached=v_total,
+                        num_heads=attn_mod.heads,
+                        transformer_options=transformer_options
+                    )
+                    return attn_mod.out_proj(out)
+                except Exception as err:
+                    logger.warning("[Prefix KV Cache] Step %d fallback in layer %d: %s", cache_manager.step_counter, layer_idx, err)
+                    return attn_mod(h_in, rope_freqs=rope_freqs, transformer_options=transformer_options)
 
             args_with_attn = dict(args)
             args_with_attn["attention"] = cached_target_attention

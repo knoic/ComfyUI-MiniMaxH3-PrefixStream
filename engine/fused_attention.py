@@ -62,13 +62,22 @@ def asymmetric_cached_attention(
                 skip_reshape=True,
                 transformer_options=transformer_options or {}
             )
-            # Output is [1, heads, S_target, head_dim]
-            # Squeeze batch and transpose back: [S_target, heads, head_dim] -> [S_target, heads * head_dim]
             if isinstance(out, AttentionTensorContainer):
                 out = out.tensor
-            out = out.squeeze(0).transpose(0, 1).contiguous()
-            s_target = out.shape[0]
-            return out.reshape(s_target, -1)
+            if hasattr(out, "unwrap"):
+                out = out.unwrap()
+
+            # ComfyUI optimized_attention with skip_reshape=True returns:
+            # - 3D [1, S_target, heads * head_dim] (standard ComfyUI path)
+            # - or 4D [1, heads, S_target, head_dim]
+            s_q = q.shape[2]
+            if out.ndim == 3:
+                return out.squeeze(0).contiguous()
+            elif out.ndim == 4:
+                return out.squeeze(0).transpose(0, 1).contiguous().reshape(s_q, -1)
+            elif out.ndim == 2:
+                return out.contiguous()
+            return out.reshape(s_q, -1).contiguous()
         except Exception:
             # Fall back to PyTorch native SDPA if Comfy container rejects non-square shapes
             pass
@@ -82,7 +91,10 @@ def asymmetric_cached_attention(
         is_causal=False
     )
 
-    # Reshape: [1, heads, S_q, dim] -> [S_q, heads * dim]
-    out = out.squeeze(0).transpose(0, 1).contiguous()
-    s_target = out.shape[0]
-    return out.reshape(s_target, -1)
+    # SDPA returns [1, heads, S_q, dim] -> [S_q, heads * dim]
+    s_q = q.shape[2]
+    if out.ndim == 4:
+        return out.squeeze(0).transpose(0, 1).contiguous().reshape(s_q, -1)
+    elif out.ndim == 3:
+        return out.squeeze(0).contiguous()
+    return out.reshape(s_q, -1).contiguous()
