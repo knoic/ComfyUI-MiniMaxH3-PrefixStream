@@ -30,6 +30,11 @@ try:
         trim_prefix_frames,
         trim_audio_latents,
         trim_audio_waveform,
+        stitch_video_images,
+        stitch_audio_waveforms,
+        trim_images_and_audio,
+        estimate_luminance_gain,
+        apply_luminance_gain_fade,
     )
 except (ImportError, ValueError):
     from engine.cache_manager import (
@@ -47,6 +52,11 @@ except (ImportError, ValueError):
         trim_prefix_frames,
         trim_audio_latents,
         trim_audio_waveform,
+        stitch_video_images,
+        stitch_audio_waveforms,
+        trim_images_and_audio,
+        estimate_luminance_gain,
+        apply_luminance_gain_fade,
     )
 
 
@@ -254,238 +264,350 @@ class MiniMaxPrefixCacheApplierNode:
 
 
 class MiniMaxTrimPrefixLatentNode:
-    """Automatically trims redundant prefix overlap frames from generated video and audio latents.
+    """Automatically trims redundant prefix overlap frames from video and audio.
     
-    Both video and audio are trimmed synchronously within the unified LATENT.
-    Connect trimmed_latent directly to VAEDecode and VAEDecodeAudio.
+    SUPPORTED MODES:
+    1. Pixel & Waveform Space (RECOMMENDED): Connect decoded 'images' and 'audio'.
+       Trims leading frames directly in pixel space, guaranteeing ZERO VAE flicker and ZERO color distortion!
+    2. Latent Space: Connect 'latent'. Trims raw latent steps.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "latent": ("LATENT",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1}),
+                "trim_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 124, "step": 1,
+                    "tooltip": "裁切的前置重叠帧数 (如 22 帧)。设为 0 且连接了 session/config 时将自动识别"
+                }),
             },
             "optional": {
+                "images": ("IMAGE", {"tooltip": "【强烈推荐】解码后的完整画面。在像素空间裁切，彻底杜绝 VAE 闪烁与偏色！"}),
+                "audio": ("AUDIO", {"tooltip": "【强烈推荐】解码后的音频。精确同步毫秒级样本截断，杜绝音画不同步"}),
+                "latent": ("LATENT", {"tooltip": "原始采样 latent (可选，若已连接 images/audio 则无需裁切 latent)"}),
                 "session": ("MINIMAX_SESSION",),
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
+                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
+                "match_tail": ("BOOLEAN", {"default": True, "tooltip": "尾部时长严格对齐：消除 H3 40Hz 音频与 24fps 画面约8ms的网格舍入累积误差"}),
                 "video_latent": ("LATENT",),  # Backward compatibility alias
-                "audio": ("AUDIO",),          # Optional raw audio waveform fallback
             }
         }
 
-    RETURN_TYPES = ("LATENT",)
-    RETURN_NAMES = ("trimmed_latent",)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "LATENT")
+    RETURN_NAMES = ("trimmed_images", "trimmed_audio", "trimmed_latent")
     FUNCTION = "trim"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
     def trim(
         self,
-        latent: Optional[Dict[str, Any]] = None,
         trim_frames: int = 0,
-        video_latent: Optional[Dict[str, Any]] = None,
+        images: Optional[torch.Tensor] = None,
         audio: Optional[Dict[str, Any]] = None,
+        latent: Optional[Dict[str, Any]] = None,
+        video_latent: Optional[Dict[str, Any]] = None,
         session: Optional[LongVideoSession] = None,
         cache_config: Optional[KVCacheConfig] = None,
+        fps: float = 24.0,
+        match_tail: bool = True,
         **kwargs
-    ) -> Tuple[Dict[str, Any]]:
-        target_latent = latent if latent is not None else video_latent
-        if target_latent is None:
-            raise ValueError("MiniMaxTrimPrefixLatentNode requires 'latent' input.")
+    ) -> Tuple[Optional[torch.Tensor], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        # 1. Determine trim frame count
+        actual_trim_frames = trim_frames
+        if actual_trim_frames <= 0:
+            if session is not None and session.last_rolling_frames > 0:
+                actual_trim_frames = session.last_rolling_frames
+            elif cache_config is not None:
+                actual_trim_frames = cache_config.rolling_frames
 
-        v, a_from_latent = _unpack_latent(target_latent)
-        if v is None:
-            v = target_latent.get("samples")
-        if v is None:
-            return (target_latent,)
-
-        # Determine how many latent steps to trim
-        trim_steps = 0
-        if trim_frames > 0:
-            trim_steps = pixel_frames_to_latent_steps(trim_frames)
-        elif session is not None and session.last_rolling_steps > 0:
-            trim_steps = session.last_rolling_steps
-        elif cache_config is not None:
-            trim_steps = cache_config.rolling_latent_frames
-
-        # Trim video latent
-        if trim_steps > 0 and trim_steps < v.shape[2]:
-            trimmed_v = v[:, :, trim_steps:]
-            p_frames = latent_steps_to_pixel_frames(trim_steps)
-            logger.info(
-                "Auto-trimmed %d prefix video latent steps (~%d frames, ~%.2fs). Remaining steps: %d",
-                trim_steps, p_frames, p_frames / 24.0, trimmed_v.shape[2]
-            )
-        else:
-            trimmed_v = v
-
-        # Trim audio latent if present inside LATENT
-        trimmed_a = None
-        if a_from_latent is not None:
-            if trim_steps > 0 and v.shape[2] > 0:
-                audio_trim_steps = int(round(trim_steps * (a_from_latent.shape[-1] / v.shape[2])))
-                trimmed_a = trim_audio_latents(a_from_latent, audio_trim_steps)
-            else:
-                trimmed_a = a_from_latent
-
-        out_latent = pack_av_latent(trimmed_v, trimmed_a, original_dict=target_latent)
-
-        # Trim raw audio waveform if provided
+        # 2. Pixel & audio waveform trimming (Golden Standard)
+        out_images = None
         out_audio = None
-        if audio is not None and "waveform" in audio:
-            sr = int(audio.get("sample_rate", 32000))
-            if trim_steps > 0:
-                p_frames = latent_steps_to_pixel_frames(trim_steps)
-                trim_samples = int((p_frames / 24.0) * sr)
-                w = trim_audio_waveform(audio["waveform"], trim_samples)
-                out_audio = {"waveform": w, "sample_rate": sr}
-            else:
-                out_audio = audio
+        if images is not None:
+            out_images, out_audio = trim_images_and_audio(
+                images=images,
+                audio=audio,
+                trim_frames=actual_trim_frames,
+                fps=fps,
+                match_tail=match_tail
+            )
+            logger.info(
+                "[Trim AV] Cleanly trimmed %d leading frames in pixel space. Output: %d frames (~%.2fs). Zero VAE flicker.",
+                actual_trim_frames, out_images.shape[0], out_images.shape[0] / float(fps)
+            )
+        elif audio is not None:
+            dummy_images = torch.empty((int(round(actual_trim_frames + 1)), 1, 1, 3))
+            _, out_audio = trim_images_and_audio(
+                images=dummy_images,
+                audio=audio,
+                trim_frames=actual_trim_frames,
+                fps=fps,
+                match_tail=match_tail
+            )
 
-        return (out_latent,)
+        # 3. Latent trimming (fallback / passthrough)
+        out_latent = None
+        target_latent = latent if latent is not None else video_latent
+        if target_latent is not None:
+            trim_steps = 0
+            if actual_trim_frames > 0:
+                trim_steps = pixel_frames_to_latent_steps(actual_trim_frames)
+            elif session is not None and session.last_rolling_steps > 0:
+                trim_steps = session.last_rolling_steps
+            elif cache_config is not None:
+                trim_steps = cache_config.rolling_latent_frames
+
+            v, a_from_latent = _unpack_latent(target_latent)
+            if v is None:
+                v = target_latent.get("samples")
+
+            if v is not None:
+                if trim_steps > 0 and trim_steps < v.shape[2]:
+                    trimmed_v = v[:, :, trim_steps:]
+                else:
+                    trimmed_v = v
+                trimmed_a = None
+                if a_from_latent is not None:
+                    if trim_steps > 0 and v.shape[2] > 0:
+                        audio_trim_steps = int(round(trim_steps * (a_from_latent.shape[-1] / v.shape[2])))
+                        trimmed_a = trim_audio_latents(a_from_latent, audio_trim_steps)
+                    else:
+                        trimmed_a = a_from_latent
+                out_latent = pack_av_latent(trimmed_v, trimmed_a, original_dict=target_latent)
+            else:
+                out_latent = target_latent
+
+        if out_images is None:
+            out_images = images if images is not None else torch.empty((0, 768, 1344, 3), dtype=torch.float32)
+        if out_audio is None:
+            out_audio = audio
+
+        return (out_images, out_audio, out_latent)
 
 
 class MiniMaxLongVideoStitcherNode:
-    """Seamlessly joins adjacent video and audio latents in unified LATENT space.
+    """Seamlessly joins adjacent video and audio clips.
     
-    Blends video latents with cosine S-curve and cross-blends audio latents.
-    Connect stitched_latent directly to VAEDecode and VAEDecodeAudio.
+    MODES:
+    1. Pixel & Audio Waveform Space (RECOMMENDED): Connect 'current_images', 'previous_images',
+       'current_audio', 'previous_audio'.
+       Performs luminance gain matching and cosine S-curve blending.
+       100% immune to VAE causal collapse, gray/dirt corrupted frames, or color distortion!
+    2. Latent Space (Fallback): Joins latents directly in latent space.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "current_latent": ("LATENT",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1}),
-                "latent_blend_steps": ("INT", {"default": 2, "min": 0, "max": 8, "step": 1}),
-                "audio_crossfade_ms": ("INT", {"default": 50, "min": 0, "max": 500, "step": 10}),
+                "trim_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 124, "step": 1,
+                    "tooltip": "重叠帧数。设为 0 且连接了 session/config 时将自动对齐"
+                }),
+                "crossfade_frames": ("INT", {
+                    "default": 4, "min": 0, "max": 24, "step": 1,
+                    "tooltip": "接缝余弦平滑过渡帧数 (推荐 4 帧，实现肉眼无痕拼接)"
+                }),
+                "luminance_match": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "亮度自适应匹配：自动分析前后片段接缝处的曝光，消除接缝亮度突变跳跃"
+                }),
+                "audio_crossfade_ms": ("INT", {
+                    "default": 50, "min": 0, "max": 500, "step": 5,
+                    "tooltip": "音频等功率微淡入淡出毫秒数，彻底消除拼接处咔哒爆音"
+                }),
             },
             "optional": {
-                "previous_latent": ("LATENT",),
+                "current_images": ("IMAGE", {"tooltip": "【强烈推荐】当前片段完整解码后的画面 (来自 VAEDecode)"}),
+                "previous_images": ("IMAGE", {"tooltip": "【强烈推荐】前一片段完整解码后的画面 (来自上一段 VAEDecode 或 LoadVideo)"}),
+                "current_audio": ("AUDIO", {"tooltip": "当前片段解码后的完整音频 (来自 VAEDecodeAudio)"}),
+                "previous_audio": ("AUDIO", {"tooltip": "前一片段解码后的完整音频 (来自上一段音频)"}),
+                "current_latent": ("LATENT", {"tooltip": "当前片段 raw latent (可选)"}),
+                "previous_latent": ("LATENT", {"tooltip": "前一片段 raw latent (可选)"}),
                 "session": ("MINIMAX_SESSION",),
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
+                "latent_blend_steps": ("INT", {"default": 2, "min": 0, "max": 8, "step": 1}),
+                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
                 "current_video": ("LATENT",),   # Backward compatibility alias
                 "previous_video": ("LATENT",),  # Backward compatibility alias
-                "current_audio": ("AUDIO",),    # Optional raw audio waveform fallback
-                "previous_audio": ("AUDIO",),   # Optional raw audio waveform fallback
             }
         }
 
-    RETURN_TYPES = ("LATENT", "LATENT")
-    RETURN_NAMES = ("stitched_latent", "trimmed_current_latent")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "IMAGE", "AUDIO", "LATENT", "LATENT")
+    RETURN_NAMES = (
+        "stitched_images", "stitched_audio",
+        "trimmed_current_images", "trimmed_current_audio",
+        "stitched_latent", "trimmed_current_latent"
+    )
     FUNCTION = "stitch"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
     def stitch(
         self,
-        current_latent: Optional[Dict[str, Any]] = None,
         trim_frames: int = 0,
-        latent_blend_steps: int = 2,
+        crossfade_frames: int = 4,
+        luminance_match: bool = True,
         audio_crossfade_ms: int = 50,
+        current_images: Optional[torch.Tensor] = None,
+        previous_images: Optional[torch.Tensor] = None,
+        current_audio: Optional[Dict[str, Any]] = None,
+        previous_audio: Optional[Dict[str, Any]] = None,
+        current_latent: Optional[Dict[str, Any]] = None,
         previous_latent: Optional[Dict[str, Any]] = None,
         current_video: Optional[Dict[str, Any]] = None,
         previous_video: Optional[Dict[str, Any]] = None,
-        current_audio: Optional[Dict[str, Any]] = None,
-        previous_audio: Optional[Dict[str, Any]] = None,
         session: Optional[LongVideoSession] = None,
         cache_config: Optional[KVCacheConfig] = None,
+        latent_blend_steps: int = 2,
+        fps: float = 24.0,
         **kwargs
-    ) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        curr_target = current_latent if current_latent is not None else current_video
-        if curr_target is None:
-            raise ValueError("MiniMaxLongVideoStitcher requires 'current_latent' input.")
-        prev_target = previous_latent if previous_latent is not None else previous_video
-
-        curr_v, curr_a = _unpack_latent(curr_target)
-        if curr_v is None:
-            curr_v = curr_target.get("samples")
-
-        prev_v, prev_a = (None, None)
-        if prev_target is not None:
-            prev_v, prev_a = _unpack_latent(prev_target)
-            if prev_v is None:
-                prev_v = prev_target.get("samples")
-
-        # Determine overlap steps for video
-        overlap_steps = 0
-        if trim_frames > 0:
-            overlap_steps = pixel_frames_to_latent_steps(trim_frames)
-        elif session is not None and session.last_rolling_steps > 0:
-            overlap_steps = session.last_rolling_steps
-        elif cache_config is not None:
-            overlap_steps = cache_config.rolling_latent_frames
-
-        # Determine overlap steps for audio latent
-        audio_overlap_steps = 0
-        if curr_a is not None and curr_v is not None and curr_v.shape[2] > 0 and overlap_steps > 0:
-            audio_overlap_steps = int(round(overlap_steps * (curr_a.shape[-1] / curr_v.shape[2])))
-
-        # 1. Generate trimmed current video & audio latent (pure new content)
-        if overlap_steps > 0 and overlap_steps < curr_v.shape[2]:
-            trimmed_curr_v = curr_v[:, :, overlap_steps:]
-        else:
-            trimmed_curr_v = curr_v
-
-        if curr_a is not None:
-            if audio_overlap_steps > 0 and audio_overlap_steps < curr_a.shape[-1]:
-                trimmed_curr_a = curr_a[..., audio_overlap_steps:]
+    ) -> Tuple[
+        Optional[torch.Tensor], Optional[Dict[str, Any]],
+        Optional[torch.Tensor], Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]], Optional[Dict[str, Any]]
+    ]:
+        # Determine overlap frame count
+        overlap_frames = trim_frames
+        if overlap_frames <= 0:
+            if session is not None and session.last_rolling_frames > 0:
+                overlap_frames = session.last_rolling_frames
+            elif cache_config is not None:
+                overlap_frames = cache_config.rolling_frames
             else:
-                trimmed_curr_a = curr_a
-        else:
-            trimmed_curr_a = None
+                overlap_frames = 22
 
-        out_trimmed_latent = pack_av_latent(trimmed_curr_v, trimmed_curr_a, original_dict=curr_target)
+        # 1. Pixel-space video stitching
+        out_stitched_images = None
+        out_trimmed_images = None
 
-        # 2. Generate stitched video & audio latent
-        if prev_v is None:
-            stitched_v = curr_v
-            stitched_a = curr_a
-        else:
-            stitched_v = stitch_video_latents(
-                prev_latent=prev_v,
-                curr_latent=curr_v,
-                overlap_steps=overlap_steps,
-                blend_steps=latent_blend_steps
+        if current_images is not None and current_images.shape[0] > 0:
+            out_trimmed_images, _ = trim_images_and_audio(
+                images=current_images,
+                audio=current_audio,
+                trim_frames=overlap_frames,
+                fps=fps
             )
-            if prev_a is not None and curr_a is not None:
-                stitched_a = stitch_audio_latents(
-                    prev_latent=prev_a,
-                    curr_latent=curr_a,
-                    overlap_steps=audio_overlap_steps,
-                    blend_steps=latent_blend_steps
+
+            if previous_images is not None and previous_images.shape[0] > 0:
+                out_stitched_images = stitch_video_images(
+                    prev_images=previous_images,
+                    curr_images=current_images,
+                    trim_frames=overlap_frames,
+                    crossfade_frames=crossfade_frames,
+                    luminance_match=luminance_match
+                )
+                logger.info(
+                    "[Stitch Video] Pixel join: %d + %d frames -> %d frames (Overlap: %df, Crossfade: %df, LumaMatch: %s)",
+                    previous_images.shape[0], current_images.shape[0], out_stitched_images.shape[0],
+                    overlap_frames, crossfade_frames, luminance_match
                 )
             else:
-                stitched_a = curr_a if curr_a is not None else prev_a
+                out_stitched_images = current_images
+        elif previous_images is not None and previous_images.shape[0] > 0:
+            out_stitched_images = previous_images
 
-        out_stitched_latent = pack_av_latent(stitched_v, stitched_a, original_dict=curr_target)
-
-        # 3. Optional raw waveform audio stitching if external AUDIO wires are connected
+        # 2. Waveform-space audio stitching
         out_stitched_audio = None
         out_trimmed_audio = None
 
         if current_audio is not None and "waveform" in current_audio:
-            sr = int(current_audio.get("sample_rate", 32000))
-            if overlap_steps > 0:
-                p_frames = latent_steps_to_pixel_frames(overlap_steps)
-                trim_samples = int((p_frames / 24.0) * sr)
-                w_trim = trim_audio_waveform(current_audio["waveform"], trim_samples)
-                out_trimmed_audio = {"waveform": w_trim, "sample_rate": sr}
-            else:
-                out_trimmed_audio = current_audio
+            curr_total_f = current_images.shape[0] if current_images is not None else 124
+            _, out_trimmed_audio = trim_images_and_audio(
+                images=current_images if current_images is not None else torch.empty((curr_total_f, 1, 1, 3)),
+                audio=current_audio,
+                trim_frames=overlap_frames,
+                fps=fps
+            )
 
-            if previous_audio is None:
+            if previous_audio is not None and "waveform" in previous_audio:
+                out_stitched_audio = stitch_audio_waveforms(
+                    prev_audio=previous_audio,
+                    curr_audio=current_audio,
+                    curr_total_frames=curr_total_f,
+                    trim_frames=overlap_frames,
+                    crossfade_ms=float(audio_crossfade_ms),
+                    fps=fps
+                )
+                logger.info(
+                    "[Stitch Audio] Waveform join with %dms crossfade. Total samples: %d",
+                    audio_crossfade_ms, out_stitched_audio["waveform"].shape[-1]
+                )
+            else:
                 out_stitched_audio = current_audio
-            else:
-                w1 = previous_audio.get("waveform")
-                w2 = out_trimmed_audio["waveform"] if out_trimmed_audio is not None else current_audio["waveform"]
-                if w1 is not None and w2 is not None:
-                    cross_samples = int((audio_crossfade_ms / 1000.0) * sr)
-                    stitched_w = audio_equal_power_crossfade(w1, w2, crossfade_samples=cross_samples)
-                    out_stitched_audio = {"waveform": stitched_w, "sample_rate": sr}
+        elif previous_audio is not None and "waveform" in previous_audio:
+            out_stitched_audio = previous_audio
 
-        return (out_stitched_latent, out_trimmed_latent)
+        # 3. Latent stitching (backward compatibility fallback)
+        out_stitched_latent = None
+        out_trimmed_latent = None
+
+        curr_target = current_latent if current_latent is not None else current_video
+        prev_target = previous_latent if previous_latent is not None else previous_video
+
+        if curr_target is not None:
+            curr_v, curr_a = _unpack_latent(curr_target)
+            if curr_v is None:
+                curr_v = curr_target.get("samples")
+
+            prev_v, prev_a = (None, None)
+            if prev_target is not None:
+                prev_v, prev_a = _unpack_latent(prev_target)
+                if prev_v is None:
+                    prev_v = prev_target.get("samples")
+
+            overlap_steps = pixel_frames_to_latent_steps(overlap_frames)
+            audio_overlap_steps = 0
+            if curr_a is not None and curr_v is not None and curr_v.shape[2] > 0 and overlap_steps > 0:
+                audio_overlap_steps = int(round(overlap_steps * (curr_a.shape[-1] / curr_v.shape[2])))
+
+            if curr_v is not None and overlap_steps > 0 and overlap_steps < curr_v.shape[2]:
+                trimmed_curr_v = curr_v[:, :, overlap_steps:]
+            else:
+                trimmed_curr_v = curr_v
+
+            if curr_a is not None:
+                if audio_overlap_steps > 0 and audio_overlap_steps < curr_a.shape[-1]:
+                    trimmed_curr_a = curr_a[..., audio_overlap_steps:]
+                else:
+                    trimmed_curr_a = curr_a
+            else:
+                trimmed_curr_a = None
+
+            if trimmed_curr_v is not None:
+                out_trimmed_latent = pack_av_latent(trimmed_curr_v, trimmed_curr_a, original_dict=curr_target)
+
+            if prev_v is None:
+                stitched_v = curr_v
+                stitched_a = curr_a
+            else:
+                stitched_v = stitch_video_latents(
+                    prev_latent=prev_v,
+                    curr_latent=curr_v,
+                    overlap_steps=overlap_steps,
+                    blend_steps=latent_blend_steps
+                )
+                if prev_a is not None and curr_a is not None:
+                    stitched_a = stitch_audio_latents(
+                        prev_latent=prev_a,
+                        curr_latent=curr_a,
+                        overlap_steps=audio_overlap_steps,
+                        blend_steps=latent_blend_steps
+                    )
+                else:
+                    stitched_a = curr_a if curr_a is not None else prev_a
+
+            if stitched_v is not None:
+                out_stitched_latent = pack_av_latent(stitched_v, stitched_a, original_dict=curr_target)
+
+        if out_stitched_images is None:
+            out_stitched_images = torch.empty((0, 768, 1344, 3), dtype=torch.float32)
+        if out_trimmed_images is None:
+            out_trimmed_images = torch.empty((0, 768, 1344, 3), dtype=torch.float32)
+
+        return (
+            out_stitched_images, out_stitched_audio,
+            out_trimmed_images, out_trimmed_audio,
+            out_stitched_latent, out_trimmed_latent
+        )
 
 
 class MiniMaxCacheMonitorNode:
@@ -529,6 +651,7 @@ class MiniMaxCacheMonitorNode:
 NODE_CLASS_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
+    "MiniMaxTrimPrefix": MiniMaxTrimPrefixLatentNode,
     "MiniMaxTrimPrefixLatent": MiniMaxTrimPrefixLatentNode,
     "MiniMaxLongVideoStitcher": MiniMaxLongVideoStitcherNode,
     "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
@@ -537,7 +660,8 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": "MiniMax H3 Prefix Cache Config",
     "MiniMaxPrefixCacheApplier": "MiniMax H3 Prefix Cache Applier",
-    "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (Auto-Crop)",
-    "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher",
+    "MiniMaxTrimPrefix": "MiniMax H3 Trim Prefix (AV Master, Zero Flicker)",
+    "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (AV Master)",
+    "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher (Seamless AV)",
     "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
 }
