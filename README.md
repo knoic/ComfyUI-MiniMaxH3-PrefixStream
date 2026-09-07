@@ -43,8 +43,9 @@ By mathematically decoupling the temporal causality of video diffusion and preco
 
 | Node Name | Category | Description |
 | :--- | :--- | :--- |
-| **`MiniMax Prefix Cache Config`** | `MiniMaxH3/PrefixStream` | Configures precision (`FP8` / `BF16`), device mode (`Auto` / `GPU` / `CPU_Pinned`), and anchor/rolling window lengths. |
-| **`MiniMax Prefix Cache Applier`** | `MiniMaxH3/PrefixStream` | Injects block-level DiT hooks into `model.model_options`, binds keyframes into `conditioning`, and executes single-pass warmup before KSampler. |
+| **`MiniMax Prefix Cache Config`** | `MiniMaxH3/PrefixStream` | Configures mode (`Safe Native` / `Step-1 Dynamic`), precision (`FP8` / `BF16`), device mode, and grid-aligned rolling window lengths. |
+| **`MiniMax Prefix Cache Applier`** | `MiniMaxH3/PrefixStream` | Injects block-level DiT hooks into `model.model_options`, binds keyframes into `conditioning` with frame-0 collision removal. |
+| **`MiniMax Trim Prefix Latent`** | `MiniMaxH3/PrefixStream` | Automatically trims leading overlap frames from generated video and audio latents synchronously. |
 | **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Smoothly joins video latents and performs equal-power cosine crossfade on audio waveforms between adjacent clips. |
 | **`MiniMax Cache Telemetry Monitor`**| `MiniMaxH3/PrefixStream` | Outputs live diagnostics on VRAM consumption, cache footprint, and session progress. |
 
