@@ -234,12 +234,12 @@ class MiniMaxTrimPrefixLatentNode:
         return {
             "required": {
                 "latent": ("LATENT",),
+                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1, "tooltip": "手动指定剔除前缀帧数 (0 表示自动根据 session/cache_config 计算)"}),
             },
             "optional": {
-                "video_latent": ("LATENT",),  # Backward compatibility alias
                 "session": ("MINIMAX_SESSION",),
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1}),
+                "video_latent": ("LATENT",),  # Backward compatibility alias
                 "audio": ("AUDIO",),          # Optional raw audio waveform fallback
             }
         }
@@ -252,11 +252,12 @@ class MiniMaxTrimPrefixLatentNode:
     def trim(
         self,
         latent: Optional[Dict[str, Any]] = None,
+        trim_frames: int = 0,
         video_latent: Optional[Dict[str, Any]] = None,
         audio: Optional[Dict[str, Any]] = None,
         session: Optional[LongVideoSession] = None,
         cache_config: Optional[KVCacheConfig] = None,
-        trim_frames: int = 0
+        **kwargs
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         target_latent = latent if latent is not None else video_latent
         if target_latent is None:
@@ -326,18 +327,18 @@ class MiniMaxLongVideoStitcherNode:
         return {
             "required": {
                 "current_latent": ("LATENT",),
+                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1, "tooltip": "手动指定切除重叠帧数 (0 表示自动根据 session/cache_config 计算)"}),
+                "latent_blend_steps": ("INT", {"default": 2, "min": 0, "max": 8, "step": 1, "tooltip": "潜空间余弦 S 曲线混合步数 (推荐 2 步)"}),
+                "audio_crossfade_ms": ("INT", {"default": 50, "min": 0, "max": 500, "step": 10, "tooltip": "音频等功率交叉淡入淡出毫秒数"}),
             },
             "optional": {
                 "previous_latent": ("LATENT",),
-                "current_video": ("LATENT",),   # Backward compatibility alias
-                "previous_video": ("LATENT",),  # Backward compatibility alias
                 "session": ("MINIMAX_SESSION",),
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 124, "step": 1}),
-                "latent_blend_steps": ("INT", {"default": 2, "min": 0, "max": 8, "step": 1}),
+                "current_video": ("LATENT",),   # Backward compatibility alias
+                "previous_video": ("LATENT",),  # Backward compatibility alias
                 "current_audio": ("AUDIO",),    # Optional raw audio waveform fallback
                 "previous_audio": ("AUDIO",),   # Optional raw audio waveform fallback
-                "audio_crossfade_ms": ("INT", {"default": 50, "min": 0, "max": 500, "step": 10}),
             }
         }
 
@@ -349,6 +350,9 @@ class MiniMaxLongVideoStitcherNode:
     def stitch(
         self,
         current_latent: Optional[Dict[str, Any]] = None,
+        trim_frames: int = 0,
+        latent_blend_steps: int = 2,
+        audio_crossfade_ms: int = 50,
         previous_latent: Optional[Dict[str, Any]] = None,
         current_video: Optional[Dict[str, Any]] = None,
         previous_video: Optional[Dict[str, Any]] = None,
@@ -356,9 +360,7 @@ class MiniMaxLongVideoStitcherNode:
         previous_audio: Optional[Dict[str, Any]] = None,
         session: Optional[LongVideoSession] = None,
         cache_config: Optional[KVCacheConfig] = None,
-        trim_frames: int = 0,
-        latent_blend_steps: int = 2,
-        audio_crossfade_ms: int = 50
+        **kwargs
     ) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         curr_target = current_latent if current_latent is not None else current_video
         if curr_target is None:

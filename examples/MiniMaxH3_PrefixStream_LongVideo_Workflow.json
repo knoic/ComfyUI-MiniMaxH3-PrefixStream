@@ -5217,8 +5217,8 @@
         2900
       ],
       "size": [
-        340,
-        160
+        360,
+        180
       ],
       "flags": {},
       "order": 21,
@@ -5230,6 +5230,14 @@
           "link": 473
         },
         {
+          "name": "trim_frames",
+          "type": "INT",
+          "widget": {
+            "name": "trim_frames"
+          },
+          "link": null
+        },
+        {
           "name": "session",
           "type": "MINIMAX_SESSION",
           "link": 526
@@ -5238,14 +5246,6 @@
           "name": "cache_config",
           "type": "MINIMAX_CACHE_CONFIG",
           "link": 527
-        },
-        {
-          "name": "trim_frames",
-          "type": "INT",
-          "widget": {
-            "name": "trim_frames"
-          },
-          "link": null
         }
       ],
       "outputs": [
@@ -5265,7 +5265,10 @@
       "title": "MiniMax H3 Trim Prefix Latent (Auto-Crop AV Latent)",
       "widgets_values": [
         0
-      ]
+      ],
+      "widgets_values_named": {
+        "trim_frames": 0
+      }
     },
     {
       "id": 371,
@@ -5275,8 +5278,8 @@
         3450
       ],
       "size": [
-        340,
-        220
+        360,
+        240
       ],
       "flags": {},
       "order": 25,
@@ -5286,21 +5289,6 @@
           "name": "current_latent",
           "type": "LATENT",
           "link": 529
-        },
-        {
-          "name": "previous_latent",
-          "type": "LATENT",
-          "link": 530
-        },
-        {
-          "name": "session",
-          "type": "MINIMAX_SESSION",
-          "link": 531
-        },
-        {
-          "name": "cache_config",
-          "type": "MINIMAX_CACHE_CONFIG",
-          "link": 532
         },
         {
           "name": "trim_frames",
@@ -5317,6 +5305,29 @@
             "name": "latent_blend_steps"
           },
           "link": null
+        },
+        {
+          "name": "audio_crossfade_ms",
+          "type": "INT",
+          "widget": {
+            "name": "audio_crossfade_ms"
+          },
+          "link": null
+        },
+        {
+          "name": "previous_latent",
+          "type": "LATENT",
+          "link": 530
+        },
+        {
+          "name": "session",
+          "type": "MINIMAX_SESSION",
+          "link": 531
+        },
+        {
+          "name": "cache_config",
+          "type": "MINIMAX_CACHE_CONFIG",
+          "link": 532
         }
       ],
       "outputs": [
@@ -5342,8 +5353,14 @@
       "title": "MiniMax H3 Long Video Stitcher (Unified AV S-Curve)",
       "widgets_values": [
         0,
-        2
-      ]
+        2,
+        50
+      ],
+      "widgets_values_named": {
+        "trim_frames": 0,
+        "latent_blend_steps": 2,
+        "audio_crossfade_ms": 50
+      }
     },
     {
       "id": 372,
