@@ -7,8 +7,11 @@ cached [K_prefix, K_target] and [V_prefix, V_target].
 """
 
 from typing import Dict, Any, Callable, Optional, Tuple
+import logging
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger("minimax_prefix_stream")
 
 try:
     from .cache_manager import PrefixKVCacheManager
@@ -121,14 +124,14 @@ def _make_block_patch(
         mode = transformer_options.get("minimax_prefix_mode", "normal")
         attn_mod = _resolve_attn(extra_options)
 
+        if attn_mod is None or not getattr(cache_manager, "enabled", True):
+            return block_wrap(args)
+
         # -------------------------------------------------------------
-        # Mode 1: Warmup Mode (Phase 0: Capture & Cache Key/Value)
+        # Mode 1: Legacy Warmup Mode (Offline forward pass if requested)
         # -------------------------------------------------------------
         if mode == "warmup":
             def warmup_attention(h_in, rope_freqs=None, transformer_options={}):
-                if attn_mod is None:
-                    return h_in
-
                 s = h_in.shape[0]
                 q, k, v = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
                 q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
@@ -150,37 +153,116 @@ def _make_block_patch(
             return block_wrap(args_with_attn)
 
         # -------------------------------------------------------------
-        # Mode 2: Denoising Mode (Phase 1: Reuse Prefix KV Cache)
+        # Mode 2: Denoising Mode (Step-1 Dynamic Capture & Step 2..N Reuse)
         # -------------------------------------------------------------
-        if mode == "denoise" and cache_manager.has_cache(layer_idx) and attn_mod is not None:
+        if mode == "denoise":
+            # Extract layout to identify prefix vs target tokens
+            layout = args.get("layout")
+            target_start = None
+            if layout is not None and hasattr(layout, "segments"):
+                for a, b, kind in layout.segments:
+                    if kind in ("video", "audio"):
+                        if target_start is None or a < target_start:
+                            target_start = a
+
+            # If no prefix condition tokens exist (e.g. initial generation without refs), passthrough
+            if target_start is None or target_start <= 0:
+                return block_wrap(args)
+
+            # Update step counter when layer 0 is encountered
+            if layer_idx == 0:
+                cache_manager.step_counter += 1
+
+            # Branch 2A: Step 1 Dynamic Capture (Cache is empty)
+            if not cache_manager.has_cache(layer_idx):
+                def capture_attention(h_in, rope_freqs=None, transformer_options={}):
+                    s = h_in.shape[0]
+                    q, k, v = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
+                    q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
+
+                    # Extract invariant prefix Key and Value (0..target_start)
+                    k_prefix = k[:, :, :target_start, :]
+                    v_prefix = v[:, :, :target_start, :]
+
+                    # Store in cache manager (quantizes & pins if configured)
+                    cache_manager.set_rolling_kv(layer_idx, k_prefix, v_prefix)
+                    if layer_idx == 0:
+                        cache_manager.captured_tokens = target_start
+                        logger.info(
+                            "[Prefix KV Cache] Step 1: Captured %d prefix tokens into 50-layer DiT cache (%s, %s).",
+                            target_start,
+                            cache_manager.config.cache_dtype.upper(),
+                            cache_manager._resolved_device_mode
+                        )
+
+                    # Full standard attention on Step 1
+                    out = asymmetric_cached_attention(
+                        q=q,
+                        k_cached=k,
+                        v_cached=v,
+                        num_heads=attn_mod.heads,
+                        transformer_options=transformer_options
+                    )
+                    return attn_mod.out_proj(out)
+
+                args_with_attn = dict(args)
+                args_with_attn["attention"] = capture_attention
+                return block_wrap(args_with_attn)
+
+            # Branch 2B: Steps 2..N Prefix KV Reuse (Target Q-Only Attention)
             next_layer = layer_idx + 1
             cache_manager.prefetch_next_layer(next_layer, args["img"].device)
 
-            def cached_attention(h_in, rope_freqs=None, transformer_options={}):
-                s = h_in.shape[0]
-                q_t, k_t, v_t = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
-                q_t, k_t, v_t = _apply_rope_and_norm(attn_mod, q_t, k_t, v_t, rope_freqs)
+            if layer_idx == 0:
+                cache_manager.skipped_steps_count += 1
+                if cache_manager.skipped_steps_count <= 2 or cache_manager.skipped_steps_count % 5 == 0:
+                    logger.info(
+                        "[Prefix KV Cache] Step %d: Reusing %d cached prefix tokens (Skipped prefix QKV across all 50 DiT layers).",
+                        cache_manager.step_counter,
+                        target_start
+                    )
 
+            def cached_target_attention(h_in, rope_freqs=None, transformer_options={}):
+                # Slice target-only hidden states (SKIPPING prefix tokens QKV projection)
+                h_target = h_in[target_start:]
+
+                # Linear projection on ONLY target tokens
+                q_t, k_t, v_t = attn_mod.qkv_proj(h_target).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
+
+                # Sliced RoPE for target positions
+                target_rope = rope_freqs[:, target_start:] if rope_freqs is not None else None
+                q_t, k_t, v_t = _apply_rope_and_norm(attn_mod, q_t, k_t, v_t, target_rope)
+
+                # Fetch cached prefix KV
                 k_prefix, v_prefix = cache_manager.get_combined_kv(
                     layer_idx=layer_idx,
                     target_device=q_t.device,
                     compute_dtype=q_t.dtype
                 )
 
+                # Concatenate [K_prefix, K_target] and [V_prefix, V_target] along token dimension
                 k_total = torch.cat([k_prefix, k_t], dim=2)
                 v_total = torch.cat([v_prefix, v_t], dim=2)
 
-                out = asymmetric_cached_attention(
+                # Asymmetric Attention: Q_target attends to [Prefix + Target]
+                out_target = asymmetric_cached_attention(
                     q=q_t,
                     k_cached=k_total,
                     v_cached=v_total,
                     num_heads=attn_mod.heads,
                     transformer_options=transformer_options
                 )
-                return attn_mod.out_proj(out)
+
+                # Project back to model hidden dimension
+                out_target_proj = attn_mod.out_proj(out_target)
+
+                # Assemble full output: prefix delta is 0, target receives fresh attention residual
+                other = torch.zeros_like(h_in)
+                other[target_start:] = out_target_proj
+                return other
 
             args_with_attn = dict(args)
-            args_with_attn["attention"] = cached_attention
+            args_with_attn["attention"] = cached_target_attention
             return block_wrap(args_with_attn)
 
         # -------------------------------------------------------------

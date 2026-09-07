@@ -118,16 +118,9 @@ class LongVideoSession:
         3. Injects keyframe anchors into conditioning payload.
         4. Injects denoising block patches into model_options.
         """
-        # Phase 0: Anchor Warmup
-        if anchor_video_latent is not None and self.config.use_anchor:
-            logger.info("Precomputing World Origin Anchor KV...")
-            self.warmup_executor.precompute_anchor(
-                model_patcher=model_patcher,
-                anchor_video_latent=anchor_video_latent,
-                text_context=text_context
-            )
+        # Reset cache manager state for upcoming clip's Step-1 online capture
+        self.cache_manager.reset_for_next_clip()
 
-        # Phase 0: Rolling Warmup (Active whenever context is provided)
         tail_video = None
         tail_audio = None
         if previous_video_latent is not None:
@@ -140,14 +133,8 @@ class LongVideoSession:
                 tail_audio = previous_audio_latent[..., -audio_steps:]
 
             logger.info(
-                "Precomputing Rolling KV with %d latent steps (~%d frames, ~%.2fs)...",
+                "Configured Rolling Context with %d latent steps (~%d frames, ~%.2fs) for Step-1 Dynamic Capture.",
                 rolling_steps, self.last_rolling_frames, self.last_rolling_frames / 24.0
-            )
-            self.warmup_executor.precompute_rolling(
-                model_patcher=model_patcher,
-                prefix_video_latent=tail_video,
-                prefix_audio_latent=tail_audio,
-                text_context=text_context
             )
 
         # Inject keyframes into conditioning payload so the model is bound to the context

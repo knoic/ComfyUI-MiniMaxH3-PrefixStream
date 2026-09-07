@@ -475,11 +475,15 @@ class MiniMaxCacheMonitorNode:
 
     def report(self, session: LongVideoSession) -> Tuple[str]:
         mem = session.cache_manager.get_memory_usage_mb()
+        status_str = "ACTIVE (Reusing Prefix KV across sampling steps)" if session.cache_manager.has_cache(0) else "READY (Step-1 online capture armed)"
         report_str = (
             f"=== MiniMax H3 Prefix KV Cache Telemetry ===\n"
+            f"Cache Engine Status: {status_str}\n"
             f"Current Clip: #{session.current_clip_index}\n"
             f"Precision: {session.config.cache_dtype.upper()}\n"
             f"Device Mode: {session.config.device_mode} (Resolved: {'CPU-Pinned' if session.cache_manager.is_cpu_pinned else 'GPU'})\n"
+            f"Active Prefix Tokens: {session.cache_manager.captured_tokens}\n"
+            f"Denoise Steps Accelerated: {session.cache_manager.skipped_steps_count}\n"
             f"GPU VRAM Usage: {mem['gpu_mb']:.2f} MB\n"
             f"CPU Pinned Usage: {mem['cpu_pinned_mb']:.2f} MB\n"
             f"Total Cache Footprint: {mem['total_mb']:.2f} MB\n"

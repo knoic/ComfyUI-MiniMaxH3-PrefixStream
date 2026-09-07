@@ -101,6 +101,13 @@ class PrefixKVCacheManager:
         self._prefetch_slot: Dict[str, Optional[Tuple[torch.Tensor, torch.Tensor]]] = {}
         self._resolved_device_mode = self._resolve_device_mode()
 
+        # Step-1 Dynamic Capture & Runtime Metrics
+        self.step_counter: int = 0
+        self.is_capturing: bool = False
+        self.captured_tokens: int = 0
+        self.skipped_steps_count: int = 0
+        self.enabled: bool = True
+
     def _resolve_device_mode(self) -> str:
         mode = self.config.device_mode.lower()
         if mode in ("gpu", "cpu_pinned"):
@@ -233,8 +240,21 @@ class PrefixKVCacheManager:
         self._rolling_k = [None] * self.config.num_layers
         self._rolling_v = [None] * self.config.num_layers
 
+    def reset_step_counter(self) -> None:
+        """Reset step counter for a new sampling run."""
+        self.step_counter = 0
+        self.is_capturing = False
+
+    def reset_for_next_clip(self) -> None:
+        """Reset capture state and rolling cache when moving to the next clip."""
+        self.reset_step_counter()
+        self.clear_rolling()
+
     def clear_all(self) -> None:
         """Clear both anchor and rolling caches."""
+        self.reset_step_counter()
+        self.captured_tokens = 0
+        self.skipped_steps_count = 0
         self._anchor_k = [None] * self.config.num_layers
         self._anchor_v = [None] * self.config.num_layers
         self.clear_rolling()
