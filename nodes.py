@@ -30,8 +30,8 @@ class MiniMaxPrefixCacheConfigNode:
                 "cache_dtype": (["fp8", "bf16", "fp16"], {"default": "fp8"}),
                 "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
                 "use_anchor": ("BOOLEAN", {"default": True}),
-                "anchor_latent_frames": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
-                "rolling_latent_frames": ("INT", {"default": 6, "min": 2, "max": 16, "step": 1}),
+                "anchor_latent_frames": ("INT", {"default": 2, "min": 1, "max": 16, "step": 1}),
+                "rolling_latent_frames": ("INT", {"default": 6, "min": 2, "max": 32, "step": 1}),
             }
         }
 
