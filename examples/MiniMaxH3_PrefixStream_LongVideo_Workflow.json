@@ -1,8 +1,8 @@
 {
   "id": "cd1ed691-6262-43d8-a31c-020f849a791b",
   "revision": 0,
-  "last_node_id": 375,
-  "last_link_id": 544,
+  "last_node_id": 376,
+  "last_link_id": 545,
   "nodes": [
     {
       "id": 2,
@@ -2020,7 +2020,8 @@
           "type": "LATENT",
           "links": [
             473,
-            474
+            474,
+            545
           ]
         },
         {
@@ -5012,140 +5013,21 @@
       }
     },
     {
-      "id": 369,
-      "type": "ReservedVRAMSetter",
-      "pos": [
-        11007.877025093967,
-        2391.004349346644
-      ],
-      "size": [
-        285.7896484375,
-        218
-      ],
-      "flags": {},
-      "order": 54,
-      "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "anything",
-          "name": "anything",
-          "shape": 7,
-          "type": "*",
-          "link": 523
-        },
-        {
-          "localized_name": "reserved",
-          "name": "reserved",
-          "type": "FLOAT",
-          "widget": {
-            "name": "reserved"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "mode",
-          "name": "mode",
-          "type": "COMBO",
-          "widget": {
-            "name": "mode"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "seed",
-          "name": "seed",
-          "type": "INT",
-          "widget": {
-            "name": "seed"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "auto_max_reserved",
-          "name": "auto_max_reserved",
-          "type": "FLOAT",
-          "widget": {
-            "name": "auto_max_reserved"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "clean_gpu_before",
-          "name": "clean_gpu_before",
-          "type": "BOOLEAN",
-          "widget": {
-            "name": "clean_gpu_before"
-          },
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "localized_name": "output",
-          "name": "output",
-          "type": "*",
-          "links": [
-            524,
-            530,
-            538
-          ]
-        },
-        {
-          "localized_name": "SEED",
-          "name": "SEED",
-          "type": "INT",
-          "links": null
-        },
-        {
-          "localized_name": "Reserved(GB)",
-          "name": "Reserved(GB)",
-          "type": "FLOAT",
-          "links": null
-        }
-      ],
-      "properties": {
-        "ue_properties": {
-          "widget_ue_connectable": {},
-          "input_ue_unconnectable": {}
-        },
-        "cnr_id": "reservedvram",
-        "ver": "be93b9375ebe8b24fa431609f56fa8f441b4b37f",
-        "Node name for S&R": "ReservedVRAMSetter"
-      },
-      "widgets_values": [
-        1.5,
-        "auto",
-        1109045794973622,
-        "randomize",
-        0,
-        true
-      ],
-      "widgets_values_named": {
-        "reserved": 1.5,
-        "mode": "auto",
-        "seed": 1109045794973622,
-        "control_after_generate": "randomize",
-        "auto_max_reserved": 0,
-        "clean_gpu_before": true
-      }
-    },
-    {
       "id": 368,
-      "type": "H3ContinuousLoadLatent",
+      "type": "MiniMaxLoadLatent",
       "pos": [
-        10445.236695620943,
-        2404.8231769364047
+        10791,
+        3350
       ],
       "size": [
-        420,
-        145
+        360,
+        140
       ],
       "flags": {},
-      "order": 42,
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "latent_path",
           "name": "latent_path",
           "type": "STRING",
           "widget": {
@@ -5154,7 +5036,6 @@
           "link": null
         },
         {
-          "localized_name": "clip_index",
           "name": "clip_index",
           "type": "INT",
           "widget": {
@@ -5165,50 +5046,39 @@
       ],
       "outputs": [
         {
-          "localized_name": "latent",
           "name": "latent",
           "type": "LATENT",
           "links": [
-            523
-          ]
+            524,
+            530,
+            538
+          ],
+          "slot_index": 0
         },
         {
-          "localized_name": "resolved_path",
-          "name": "resolved_path",
+          "name": "loaded_path",
           "type": "STRING",
-          "links": null
+          "links": [],
+          "slot_index": 1
         },
         {
-          "localized_name": "latent_info",
           "name": "latent_info",
           "type": "STRING",
-          "links": null
-        },
-        {
-          "localized_name": "handover",
-          "name": "handover",
-          "type": "H3_CONTINUOUS_HANDOVER",
-          "links": []
+          "links": [],
+          "slot_index": 2
         }
       ],
-      "title": "LOAD Previous AV Latent + Handover Metadata (Clip 1)",
       "properties": {
-        "ue_properties": {
-          "widget_ue_connectable": {},
-          "version": "7.8",
-          "input_ue_unconnectable": {}
-        },
-        "cnr_id": "herrgotts-h3-infinite-continuation-suite",
-        "ver": "1.4.0",
-        "Node name for S&R": "H3ContinuousLoadLatent"
+        "Node name for S&R": "MiniMaxLoadLatent"
       },
+      "title": "MiniMax H3 Load AV Latent (Standalone Clip 1)",
       "widgets_values": [
-        "h3_continuous",
-        2
+        "minimax_h3/clip",
+        1
       ],
       "widgets_values_named": {
-        "latent_path": "h3_continuous",
-        "clip_index": 2
+        "latent_path": "minimax_h3/clip",
+        "clip_index": 1
       }
     },
     {
@@ -5292,6 +5162,70 @@
         "trim_frames": 0,
         "fps": 24.0,
         "match_tail": true
+      }
+    },
+    {
+      "id": 376,
+      "type": "MiniMaxSaveLatent",
+      "pos": [
+        12130,
+        3200
+      ],
+      "size": [
+        360,
+        140
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "link": 545
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        },
+        {
+          "name": "clip_index",
+          "type": "INT",
+          "widget": {
+            "name": "clip_index"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "saved_path",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 0
+        },
+        {
+          "name": "latent_info",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxSaveLatent"
+      },
+      "title": "MiniMax H3 Save AV Latent (Standalone)",
+      "widgets_values": [
+        "minimax_h3/clip",
+        2
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "minimax_h3/clip",
+        "clip_index": 2
       }
     },
     {
@@ -6093,54 +6027,6 @@
       "CONDITIONING"
     ],
     [
-      518,
-      366,
-      0,
-      367,
-      1,
-      "MINIMAX_CACHE_CONFIG"
-    ],
-    [
-      520,
-      87,
-      0,
-      367,
-      0,
-      "MODEL"
-    ],
-    [
-      521,
-      367,
-      0,
-      83,
-      0,
-      "MODEL"
-    ],
-    [
-      522,
-      367,
-      0,
-      103,
-      0,
-      "MODEL"
-    ],
-    [
-      523,
-      368,
-      0,
-      369,
-      0,
-      "LATENT"
-    ],
-    [
-      524,
-      369,
-      0,
-      367,
-      2,
-      "LATENT"
-    ],
-    [
       525,
       367,
       1,
@@ -6197,8 +6083,16 @@
       "AUDIO"
     ],
     [
+      524,
+      368,
+      0,
+      367,
+      3,
+      "LATENT"
+    ],
+    [
       530,
-      369,
+      368,
       0,
       372,
       0,
@@ -6206,7 +6100,7 @@
     ],
     [
       538,
-      369,
+      368,
       0,
       375,
       0,
@@ -6227,6 +6121,14 @@
       375,
       1,
       "VAE"
+    ],
+    [
+      545,
+      79,
+      0,
+      376,
+      0,
+      "LATENT"
     ],
     [
       529,

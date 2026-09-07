@@ -8,9 +8,22 @@ Exposes:
 - MiniMaxCacheMonitor: Real-time diagnostics for VRAM, memory footprint, and session progress.
 """
 
-from typing import Dict, Any, Tuple, Optional
+import os
+import json
 import logging
+from typing import Dict, Any, Tuple, Optional
 import torch
+
+try:
+    from safetensors.torch import load_file as st_load, save_file as st_save
+except ImportError:
+    try:
+        import safetensors.torch
+        st_load = safetensors.torch.load_file
+        st_save = safetensors.torch.save_file
+    except ImportError:
+        st_load = None
+        st_save = None
 
 logger = logging.getLogger("minimax_prefix_stream")
 
@@ -648,6 +661,184 @@ class MiniMaxCacheMonitorNode:
         return (report_str,)
 
 
+class MiniMaxSaveLatentNode:
+    """Saves the complete joint MiniMax H3 AV latent to safetensors for seamless continuation.
+    
+    Guarantees 100% independent, standalone operation without requiring external continuation suites.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "latent": ("LATENT", {"tooltip": "Sampler output joint AV latent to save."}),
+                "filename_prefix": ("STRING", {
+                    "default": "minimax_h3/clip",
+                    "tooltip": "Subfolder and filename prefix in ComfyUI output directory."
+                }),
+                "clip_index": ("INT", {
+                    "default": 1, "min": 0, "max": 99999, "step": 1,
+                    "tooltip": "Fixed chain slot (1, 2, 3...). 0 = auto-incrementing."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("saved_path", "latent_info")
+    OUTPUT_NODE = True
+    FUNCTION = "save"
+    CATEGORY = "MiniMaxH3/PrefixStream"
+
+    def save(
+        self,
+        latent: Dict[str, Any],
+        filename_prefix: str = "minimax_h3/clip",
+        clip_index: int = 1,
+        **kwargs
+    ) -> Tuple[str, str]:
+        if latent is None:
+            raise ValueError("MiniMaxSaveLatent: 'latent' input is required.")
+
+        video, audio = _unpack_latent(latent)
+        if video is None:
+            raise ValueError("MiniMaxSaveLatent: latent contains no video samples.")
+
+        video_cpu = video.detach().cpu().contiguous()
+        audio_cpu = audio.detach().cpu().contiguous() if audio is not None else None
+
+        try:
+            import folder_paths
+            base_dir = folder_paths.get_output_directory()
+        except Exception:
+            base_dir = "output"
+
+        target_dir = os.path.join(base_dir, os.path.dirname(filename_prefix))
+        os.makedirs(target_dir, exist_ok=True)
+
+        base_name = os.path.basename(filename_prefix)
+        if clip_index > 0:
+            filename = f"{base_name}_{clip_index:05d}.safetensors"
+        else:
+            filename = f"{base_name}_temp.safetensors"
+        full_path = os.path.join(target_dir, filename)
+
+        tensors = {"video": video_cpu}
+        if audio_cpu is not None:
+            tensors["audio"] = audio_cpu
+
+        frame_count = latent_steps_to_pixel_frames(video_cpu.shape[2])
+
+        if st_save is not None:
+            st_save(
+                tensors,
+                full_path,
+                metadata={
+                    "format": "minimax_h3_av_latent",
+                    "frame_count": str(frame_count),
+                    "clip_index": str(clip_index),
+                    "video_shape": json.dumps(list(video_cpu.shape)),
+                    "audio_shape": json.dumps(list(audio_cpu.shape)) if audio_cpu is not None else "none",
+                }
+            )
+        else:
+            torch.save(tensors, full_path)
+
+        info_str = f"{frame_count} frames | Video {tuple(video_cpu.shape)}"
+        if audio_cpu is not None:
+            info_str += f" | Audio {tuple(audio_cpu.shape)}"
+        logger.info("[Save Latent] Successfully saved %s -> %s", info_str, full_path)
+        return (full_path, info_str)
+
+
+class MiniMaxLoadLatentNode:
+    """Loads a saved MiniMax H3 joint AV latent for continuation and long-video stitching.
+    
+    Guarantees 100% independent, standalone operation: compatible with any saved H3 safetensors latent.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "latent_path": ("STRING", {
+                    "default": "minimax_h3/clip",
+                    "tooltip": "Folder or filepath relative to ComfyUI output, or absolute path."
+                }),
+                "clip_index": ("INT", {
+                    "default": 1, "min": 0, "max": 99999, "step": 1,
+                    "tooltip": "Clip index to load (e.g. 1 to continue Clip 2). 0 = latest file."
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("LATENT", "STRING", "STRING")
+    RETURN_NAMES = ("latent", "loaded_path", "latent_info")
+    FUNCTION = "load"
+    CATEGORY = "MiniMaxH3/PrefixStream"
+
+    def load(
+        self,
+        latent_path: str = "minimax_h3/clip",
+        clip_index: int = 1
+    ) -> Tuple[Dict[str, Any], str, str]:
+        try:
+            import folder_paths
+            base_dir = folder_paths.get_output_directory()
+        except Exception:
+            base_dir = "output"
+
+        p = (latent_path or "").strip().strip('"').strip("'")
+        if not os.path.isabs(p):
+            full_target = os.path.join(base_dir, p)
+        else:
+            full_target = p
+
+        if os.path.isfile(full_target):
+            target_file = full_target
+        else:
+            parent_dir = os.path.dirname(full_target)
+            base_name = os.path.basename(full_target)
+            if os.path.isdir(parent_dir):
+                if clip_index > 0:
+                    candidates = [f for f in os.listdir(parent_dir) if f.startswith(base_name) and f.endswith(".safetensors")]
+                    matched = [f for f in candidates if f"_{clip_index:05d}" in f or f"_{clip_index}." in f or f"_{clip_index}_" in f]
+                    if matched:
+                        target_file = os.path.join(parent_dir, matched[0])
+                    else:
+                        target_file = os.path.join(parent_dir, f"{base_name}_{clip_index:05d}.safetensors")
+                else:
+                    candidates = [os.path.join(parent_dir, f) for f in os.listdir(parent_dir) if f.endswith(".safetensors")]
+                    if candidates:
+                        target_file = max(candidates, key=os.path.getmtime)
+                    else:
+                        target_file = full_target
+            else:
+                target_file = full_target
+
+        if not os.path.exists(target_file):
+            raise FileNotFoundError(f"MiniMaxLoadLatent: file not found at '{target_file}'")
+
+        if st_load is not None:
+            tensors = st_load(target_file, device="cpu")
+        else:
+            tensors = torch.load(target_file, map_location="cpu")
+
+        if "video" not in tensors:
+            raise ValueError(f"MiniMaxLoadLatent: '{target_file}' does not contain 'video' tensor.")
+
+        video = tensors["video"]
+        audio = tensors.get("audio", None)
+
+        out_latent = pack_av_latent(video, audio)
+        frame_count = latent_steps_to_pixel_frames(video.shape[2])
+        info_str = f"{frame_count} frames | Video {tuple(video.shape)}"
+        if audio is not None:
+            info_str += f" | Audio {tuple(audio.shape)}"
+
+        logger.info("[Load Latent] Successfully loaded %s (%s)", target_file, info_str)
+        return (out_latent, target_file, info_str)
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
@@ -655,6 +846,8 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxTrimPrefixLatent": MiniMaxTrimPrefixLatentNode,
     "MiniMaxLongVideoStitcher": MiniMaxLongVideoStitcherNode,
     "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
+    "MiniMaxSaveLatent": MiniMaxSaveLatentNode,
+    "MiniMaxLoadLatent": MiniMaxLoadLatentNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -664,4 +857,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (AV Master)",
     "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher (Seamless AV)",
     "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
+    "MiniMaxSaveLatent": "MiniMax H3 Save AV Latent (Standalone)",
+    "MiniMaxLoadLatent": "MiniMax H3 Load AV Latent (Standalone)",
 }

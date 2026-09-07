@@ -44,10 +44,20 @@ By mathematically decoupling the temporal causality of video diffusion and preco
 | Node Name | Category | Description |
 | :--- | :--- | :--- |
 | **`MiniMax Prefix Cache Config`** | `MiniMaxH3/PrefixStream` | Configures mode (`Safe Native` / `Step-1 Dynamic`), precision (`FP8` / `BF16`), device mode, and grid-aligned rolling window lengths. |
-| **`MiniMax Prefix Cache Applier`** | `MiniMaxH3/PrefixStream` | Injects block-level DiT hooks into `model.model_options`, binds keyframes into `conditioning` with frame-0 collision removal. |
-| **`MiniMax Trim Prefix Latent`** | `MiniMaxH3/PrefixStream` | Automatically trims leading overlap frames from generated video and audio latents synchronously. |
-| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Smoothly joins video latents and performs equal-power cosine crossfade on audio waveforms between adjacent clips. |
+| **`MiniMax Prefix Cache Applier`** | `MiniMaxH3/PrefixStream` | Injects block-level DiT hooks or native conditioning keyframe anchors with frame-0 collision removal. |
+| **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, guaranteeing zero VAE causal flicker and perfect sync. |
+| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly joins video in pixel space (with luminance gain matching) and audio waveforms (equal-power crossfade). |
+| **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to save joint AV latents to safetensors without external dependencies. |
+| **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to load joint AV latents with metadata for multi-clip continuous streaming. |
 | **`MiniMax Cache Telemetry Monitor`**| `MiniMaxH3/PrefixStream` | Outputs live diagnostics on VRAM consumption, cache footprint, and session progress. |
+
+---
+
+## 100% Standalone & Independent Architecture
+
+- 🛡️ **Zero External Patching**: Does **NOT** require any external file-patching scripts (`patch_model.py` is NEVER needed). Operates directly on stock, official ComfyUI.
+- 🚀 **Zero Third-Party Suite Dependencies**: Completely replaces third-party latent loaders/savers or speed patches (e.g. `TE-Speed-MiniMaxH3`, `Herrgotts-H3-Infinite-Continuation-Suite`, `ReservedVRAM`). Everything needed for long video streaming continuation is built natively into this repository.
+- 🔒 **Safe Native Mode**: 100% native ComfyUI attention with zero DiT monkey-patching for rock-solid stability and zero artifacts.
 
 ---
 

@@ -156,14 +156,6 @@ def _make_block_patch(
         # Mode 2: Denoising Mode (Step-1 Dynamic Capture & Step 2..N Reuse)
         # -------------------------------------------------------------
         if mode == "denoise":
-            # If ComfyUI CUDA graph compiler is active, pass through to avoid graph replay aborts
-            try:
-                import comfy.model_prefetch
-                if comfy.model_prefetch.malloc_graph_enabled(args["img"].device):
-                    return block_wrap(args)
-            except Exception:
-                pass
-
             # Identify condition token bounds (cond & cond_audio).
             # Text tokens (0..text_len) MUST NOT be cached, as their timestep t_v = 1 - sigma varies every step.
             layout = args.get("layout")
