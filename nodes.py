@@ -58,6 +58,32 @@ class MiniMaxPrefixCacheConfigNode:
         return (config,)
 
 
+def _unpack_latent(latent_dict: Optional[Dict[str, Any]]) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """Unpacks video and audio tensors from an H3 latent dict, handling NestedTensor."""
+    if latent_dict is None:
+        return None, None
+    samples = latent_dict.get("samples")
+    if samples is None:
+        return None, None
+    if hasattr(samples, "unbind"):
+        parts = list(samples.unbind())
+        v = parts[0]
+        a = parts[1] if len(parts) > 1 else None
+    elif isinstance(samples, (tuple, list)):
+        v = samples[0]
+        a = samples[1] if len(samples) > 1 else None
+    elif isinstance(samples, torch.Tensor):
+        v = samples
+        a = None
+    else:
+        return None, None
+    if v is not None and v.ndim == 4:
+        v = v.unsqueeze(0)
+    if a is not None and a.ndim == 3:
+        a = a.unsqueeze(0)
+    return v, a
+
+
 class MiniMaxPrefixCacheApplierNode:
     """Attaches Prefix KV Caching engine to MiniMax H3 model and injects keyframe conditioning before diffusion sampling."""
 
@@ -96,10 +122,16 @@ class MiniMaxPrefixCacheApplierNode:
         cfg = cache_config or KVCacheConfig()
         sess = session or LongVideoSession(cfg)
 
-        # Extract video latents from ComfyUI dict {"samples": tensor}
-        v_ctx = context_video_latent["samples"] if context_video_latent is not None else None
-        v_anc = anchor_video_latent["samples"] if anchor_video_latent is not None else None
-        a_ctx = context_audio["waveform"] if context_audio is not None else None
+        # Unpack video and audio from latents (supports ComfyUI NestedTensor from H3ContinuousLoadLatent)
+        v_ctx, a_ctx_from_latent = _unpack_latent(context_video_latent)
+        v_anc, _ = _unpack_latent(anchor_video_latent)
+
+        # Audio priority: explicit context_audio or extracted from context_video_latent
+        a_ctx = None
+        if context_audio is not None and "waveform" in context_audio:
+            a_ctx = context_audio["waveform"]
+        elif a_ctx_from_latent is not None:
+            a_ctx = a_ctx_from_latent
 
         # Prepare next clip (handles Phase 0 warmup, keyframe conditioning injection, and Phase 1 hook injection)
         patched_model, out_cond = sess.prepare_next_clip(
