@@ -41,3 +41,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 *.log
+
+# Private / User Workflows
+*adapted*.json
+*user*.json
+
