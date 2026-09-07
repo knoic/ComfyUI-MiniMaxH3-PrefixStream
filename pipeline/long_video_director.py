@@ -9,13 +9,13 @@ import logging
 import torch
 
 try:
-    from ..engine.cache_manager import PrefixKVCacheManager, KVCacheConfig
+    from ..engine.cache_manager import PrefixKVCacheManager, KVCacheConfig, latent_steps_to_pixel_frames, pixel_frames_to_latent_steps
     from ..engine.rope_aligner import TemporalCursorTracker
     from ..engine.warmup_executor import WarmupExecutor
     from ..engine.block_hook import create_prefix_dit_hook
     from .seam_protector import audio_equal_power_crossfade, latent_soft_blend, trim_prefix_frames
 except (ImportError, ValueError):
-    from engine.cache_manager import PrefixKVCacheManager, KVCacheConfig
+    from engine.cache_manager import PrefixKVCacheManager, KVCacheConfig, latent_steps_to_pixel_frames, pixel_frames_to_latent_steps
     from engine.rope_aligner import TemporalCursorTracker
     from engine.warmup_executor import WarmupExecutor
     from engine.block_hook import create_prefix_dit_hook
@@ -97,6 +97,8 @@ class LongVideoSession:
         self.warmup_executor = WarmupExecutor(self.cache_manager)
 
         self.current_clip_index: int = 0
+        self.last_rolling_steps: int = 0
+        self.last_rolling_frames: int = 0
         self.accumulated_video_latents: List[torch.Tensor] = []
         self.accumulated_audio_latents: List[torch.Tensor] = []
 
@@ -130,12 +132,17 @@ class LongVideoSession:
         tail_audio = None
         if previous_video_latent is not None:
             rolling_steps = min(self.config.rolling_latent_frames, previous_video_latent.shape[2])
+            self.last_rolling_steps = rolling_steps
+            self.last_rolling_frames = latent_steps_to_pixel_frames(rolling_steps)
             tail_video = previous_video_latent[:, :, -rolling_steps:]
             if previous_audio_latent is not None:
                 audio_steps = min(int(rolling_steps * 1.6), previous_audio_latent.shape[-1])
                 tail_audio = previous_audio_latent[..., -audio_steps:]
 
-            logger.info("Precomputing Rolling KV with %d latent steps...", rolling_steps)
+            logger.info(
+                "Precomputing Rolling KV with %d latent steps (~%d frames, ~%.2fs)...",
+                rolling_steps, self.last_rolling_frames, self.last_rolling_frames / 24.0
+            )
             self.warmup_executor.precompute_rolling(
                 model_patcher=model_patcher,
                 prefix_video_latent=tail_video,

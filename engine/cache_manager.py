@@ -12,6 +12,27 @@ import torch
 logger = logging.getLogger("minimax_prefix_stream")
 
 
+FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
+
+
+def pixel_frames_to_latent_steps(pixel_frames: int) -> int:
+    """Converts pixel frames to the minimum MiniMax H3 latent steps covering them."""
+    if pixel_frames <= 0:
+        return 0
+    k, covered = 0, 0
+    while covered < pixel_frames:
+        covered += FRAME_PER_TOKEN[k % 5]
+        k += 1
+    return max(1, k)
+
+
+def latent_steps_to_pixel_frames(latent_steps: int) -> int:
+    """Calculates exact pixel frames spanned by MiniMax H3 latent steps."""
+    if latent_steps <= 0:
+        return 0
+    return sum(FRAME_PER_TOKEN[k % 5] for k in range(latent_steps))
+
+
 @dataclass
 class KVCacheConfig:
     """Configuration for MiniMax H3 Prefix KV Cache."""
@@ -21,9 +42,33 @@ class KVCacheConfig:
     cache_dtype: str = "fp8"          # "fp8", "bf16", "fp16"
     device_mode: str = "auto"         # "gpu", "cpu_pinned", "auto"
     use_anchor: bool = True           # Keep initial frame(s) as permanent anchor
-    anchor_latent_frames: int = 2     # Latent steps for anchor (~5 pixel frames)
-    rolling_latent_frames: int = 6    # Latent steps for rolling window (~19 pixel frames)
+    rolling_frames: int = 22          # Real video frames for rolling window (default 22 frames, ~0.92s @ 24fps)
+    anchor_frames: int = 5            # Real video frames for anchor (default 5 frames, ~0.21s @ 24fps)
     temporal_stride: int = 1          # 1 = keep all, 2 = 2x temporal sub-sampling
+
+    # Internal overrides / compatibility
+    _rolling_latent_frames: Optional[int] = None
+    _anchor_latent_frames: Optional[int] = None
+
+    @property
+    def rolling_latent_frames(self) -> int:
+        if self._rolling_latent_frames is not None:
+            return self._rolling_latent_frames
+        return pixel_frames_to_latent_steps(self.rolling_frames)
+
+    @rolling_latent_frames.setter
+    def rolling_latent_frames(self, val: int):
+        self._rolling_latent_frames = val
+
+    @property
+    def anchor_latent_frames(self) -> int:
+        if self._anchor_latent_frames is not None:
+            return self._anchor_latent_frames
+        return pixel_frames_to_latent_steps(self.anchor_frames)
+
+    @anchor_latent_frames.setter
+    def anchor_latent_frames(self, val: int):
+        self._anchor_latent_frames = val
 
     @property
     def torch_dtype(self) -> torch.dtype:

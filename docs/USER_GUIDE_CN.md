@@ -23,15 +23,15 @@
 ## 二、 核心节点详解
 
 ### 1. `MiniMax Prefix Cache Config`（缓存策略配置节点）
-用于定义缓存的存储精度、硬件内存分配策略以及双轨窗口长度。
+用于定义缓存的存储精度、硬件内存分配策略以及双轨窗口长度（**以创作者直觉的真实画面帧数填入，无需换算 Latent**）。
 
 | 参数项 | 可选值 / 默认值 | 推荐配置与说明 |
 | :--- | :--- | :--- |
 | **`cache_dtype`** | `fp8` / `bf16` / `fp16`<br>*(默认 `fp8`)* | **强烈推荐 `fp8`**（在 24GB 显卡如 RTX 3090/4090 上，50 层 KV 显存占用从 7.8GB 骤降至 **~3.9GB**，肉眼画质无损）；若使用 48GB+ 专业显卡（A100/H100），可直接选 `bf16`。 |
 | **`device_mode`** | `auto` / `gpu` / `cpu_pinned`<br>*(默认 `auto`)* | - `auto`：系统空闲显存 > 16GB 时走 GPU 常驻；显存不足时自动降级到 CPU 锁页内存。<br>- `gpu`：速度最快，全驻留显存。<br>- `cpu_pinned`：**零 GPU 显存增量**，通过异步 CUDA Stream 随层预取，杜绝爆显存。 |
 | **`use_anchor`** | `True` / `False`<br>*(默认 `True`)* | **核心防漂移开关**。开启后将永久锁定第 0 帧世界原点（面部五官、服装纹理、核心光影），生成 100+ 切片人物也不变形。 |
-| **`anchor_latent_frames`** | `1 ~ 10`<br>*(默认 `2`)* | 锚点潜空间步数。2 步潜空间覆盖约 5 帧真实图像，足以承载完整的五官与环境几何。 |
-| **`rolling_latent_frames`** | `2 ~ 16`<br>*(默认 `6`)* | 动态运动滑动窗口步数。6 步潜空间覆盖约 19 帧真实图像，保证前后切片镜头运动、肢体动势与光影渐变的连续性。 |
+| **`rolling_frames`** | `4 ~ 124`<br>*(默认 `22`)* | **动态滑动近景窗口（真实物理帧数）**。默认 **22 帧**（在 24fps 下刚好约 **0.92 秒**，对应 7 步 Latent），负责传承上一段末尾的速度矢量、肢体动势与光照渐变。 |
+| **`anchor_frames`** | `1 ~ 30`<br>*(默认 `5`)* | **世界原点永久锚点（真实物理帧数）**。默认 **5 帧**（约 0.21 秒，对应 2 步 Latent），承载主角初始五官几何与场景基调。 |
 
 ---
 
@@ -39,30 +39,41 @@
 连接在模型调度链与提示词条件链上，负责在采样器运行前执行单步 Phase 0 预热（提取 KV），并将前缀帧绑定为 `minimax_keyframes` 注入到 `conditioning` 中，同时将 Phase 1 降噪 Hook 注入到模型的 `model_options` 中。
 
 * **连接方式（关键插槽）**：
-  * `model`：连接自 `MiniMaxH3SigmaShift` 的输出端。
-  * `conditioning`：**必须连接自 `CLIPTextEncode` 的正面提示词输出**。
+  * `model`：连接自模型加载或调度器的输出端。
+  * `conditioning`：**必须连接自正面提示词条件输出（如 `MiniMaxH3ReferenceToVideo` 的 `positive`）**。
   * `cache_config`：连接自 `MiniMax Prefix Cache Config`。
-  * `context_video_latent` *(可选)*：连接上一段视频尾部输出的 Latent（作为动态 Rolling 上下文）。
+  * `context_video_latent` *(可选)*：连接上一段视频尾部输出的 Latent（作为动态 Rolling 上下文，支持 NestedTensor 自动解包）。
   * `anchor_video_latent` *(可选)*：连接初始首帧/参考图像编码后的 Latent（作为永久 Anchor）。
   * `context_audio` *(可选)*：连接上一段视频尾部的音频（实现音视频同步连续性）。
 * **输出**：
-  * `model`：已挂载极速 Block 级 Hook 的模型，输入给 `KSampler` 的 `model`。
-  * `conditioning`：**已注入前置关键帧锚点的条件，输入给 `KSampler` 的 `positive`**。
-  * `session`：当前长视频生成会话对象，用于传递给监视器或下一个切片。
+  * `model`：已挂载极速 Block 级 Hook 的模型，输入给采样器（如 `BasicGuider` / `KSampler`）。
+  * `conditioning`：**已注入前置关键帧锚点的条件，输入给采样器的 `conditioning`**。
+  * `session`：当前长视频生成会话对象，用于传递给裁切节点、缝合节点或监视器。
 
 ---
 
-### 3. `MiniMax Long Video Stitcher`（无缝缝合与音频平滑）
-消除切片之间的硬切缝隙感与音频接缝咔哒声。
-
-* **参数**：
-  * `latent_blend_steps` *(默认 `2`)*：在潜空间时间轴上执行微小软过渡融合的步数。
-  * `audio_crossfade_ms` *(默认 `50`)*：音频 50 毫秒等功率余弦交叉淡入淡出，消除由于相位断层产生的杂音。
+### 3. `MiniMax Trim Prefix Latent (Auto-Crop)`（自动剔除前缀重复帧节点）
+**【彻底告别手动剪映/PR裁剪】** 专用于一段一段导出独立 MP4 的场景。
+续写生成的视频开头必然包含约 1 秒的前置过渡重叠帧。接入本节点后，节点将**在潜空间层面直接无损切除注入的前缀**：
+- **输入**：`video_latent`（采样器输出的原生 Latent）、`session` 或 `cache_config`。
+- **输出**：`trimmed_video`（纯净新片段，直接连入 `VAEDecode` 导出即是干净的新画面，0 帧重复回放！）。
+- **附加优势**：直接在 Latent 上裁除，使得 VAE Decode 少解码 25% 图像，显著节省显存并加快解码。
 
 ---
 
-### 4. `MiniMax Cache Telemetry Monitor`（遥测监视器）
-连接 `session`，输出当前显存开销、CPU 搬运占用、切片序号等实时诊断信息，可在 ComfyUI 中接 `ShowText` 实时查看。
+### 4. `MiniMax Long Video Stitcher`（无缝缝合与长视频合成节点）
+**【全自动长视频拼接】** 用于将 Clip 1 与 Clip 2 直接合成连续长视频的场景。
+- **输入**：`current_video`、`previous_video`、`session` 等。
+- **输出**：
+  - `stitched_video`：**无缝长视频**。自动将两段视频的重合区在潜空间用平滑余弦 S 曲线混合消除硬缝，一键生成无缝超长大片！
+  - `trimmed_current_video`：当前切片的纯净新内容。
+  - `stitched_audio`：经过 50ms 等功率立体声淡入淡出后的拼接音频。
+  - `trimmed_current_audio`：纯净新切片音频。
+
+---
+
+### 5. `MiniMax Cache Telemetry Monitor`（遥测监视器）
+连接 `session`，输出当前显存开销、CPU 搬运占用、切片序号、实际裁切帧数等实时诊断信息，可在 ComfyUI 中接 `ShowText` 实时查看。
 
 ---
 

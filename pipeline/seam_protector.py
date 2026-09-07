@@ -62,6 +62,38 @@ def latent_soft_blend(
     return torch.cat([latent1[:, :, :-b], blended, latent2[:, :, b:]], dim=2)
 
 
+def stitch_video_latents(
+    prev_latent: torch.Tensor,
+    curr_latent: torch.Tensor,
+    overlap_steps: int,
+    blend_steps: int = 2
+) -> torch.Tensor:
+    """Stitches two contiguous video latents, seamlessly blending the overlap region.
+
+    prev_latent: [B, C, T1, H, W]
+    curr_latent: [B, C, T2, H, W] where curr_latent[:, :, :overlap_steps] overlaps with prev_latent[:, :, -overlap_steps:]
+    """
+    if overlap_steps <= 0:
+        return latent_soft_blend(prev_latent, curr_latent, blend_steps=blend_steps)
+
+    ov = min(overlap_steps, prev_latent.shape[2], curr_latent.shape[2])
+    if ov <= 0:
+        return torch.cat([prev_latent, curr_latent], dim=2)
+
+    # Overlap slices
+    prev_head = prev_latent[:, :, :-ov]
+    prev_overlap = prev_latent[:, :, -ov:]
+    curr_overlap = curr_latent[:, :, :ov]
+    curr_tail = curr_latent[:, :, ov:]
+
+    # Blend the overlap region smoothly with smooth cosine S-curve
+    t = torch.linspace(0.0, math.pi / 2, ov, device=curr_latent.device, dtype=curr_latent.dtype)
+    alpha = (torch.sin(t) ** 2).view(1, 1, -1, 1, 1)
+    blended_overlap = (1.0 - alpha) * prev_overlap + alpha * curr_overlap
+
+    return torch.cat([prev_head, blended_overlap, curr_tail], dim=2)
+
+
 def trim_prefix_frames(
     full_video_latent: torch.Tensor,
     prefix_latent_steps: int
@@ -72,3 +104,15 @@ def trim_prefix_frames(
     if prefix_latent_steps >= full_video_latent.shape[2]:
         return full_video_latent
     return full_video_latent[:, :, prefix_latent_steps:]
+
+
+def trim_audio_waveform(
+    waveform: torch.Tensor,
+    trim_samples: int
+) -> torch.Tensor:
+    """Trims leading samples from audio waveform."""
+    if trim_samples <= 0:
+        return waveform
+    if trim_samples >= waveform.shape[-1]:
+        return waveform
+    return waveform[..., trim_samples:]

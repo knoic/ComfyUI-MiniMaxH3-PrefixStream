@@ -8,6 +8,7 @@ Slashes DiT computation by ~45% and prevents long-video degradation via Dual-Tie
 from .nodes import (
     MiniMaxPrefixCacheConfigNode,
     MiniMaxPrefixCacheApplierNode,
+    MiniMaxTrimPrefixLatentNode,
     MiniMaxLongVideoStitcherNode,
     MiniMaxCacheMonitorNode,
 )
@@ -15,6 +16,7 @@ from .nodes import (
 NODE_CLASS_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
+    "MiniMaxTrimPrefixLatent": MiniMaxTrimPrefixLatentNode,
     "MiniMaxLongVideoStitcher": MiniMaxLongVideoStitcherNode,
     "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
 }
@@ -22,6 +24,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": "MiniMax H3 Prefix Cache Config",
     "MiniMaxPrefixCacheApplier": "MiniMax H3 Prefix Cache Applier",
+    "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (Auto-Crop)",
     "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher",
     "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
 }
