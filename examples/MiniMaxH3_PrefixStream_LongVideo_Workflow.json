@@ -1,17 +1,17 @@
 {
-  "last_node_id": 17,
-  "last_link_id": 21,
+  "last_node_id": 22,
+  "last_link_id": 35,
   "nodes": [
     {
       "id": 1,
       "type": "UNETLoader",
       "pos": [
-        -1200,
-        -280
+        1000,
+        1000
       ],
       "size": [
-        300,
-        90
+        410,
+        85
       ],
       "flags": {},
       "order": 0,
@@ -31,19 +31,20 @@
         "Node name for S&R": "UNETLoader"
       },
       "widgets_values": [
-        "minimax_h3_fl2va_bf16.safetensors"
+        "minimax_h3_fl2va_bf16.safetensors",
+        "default"
       ]
     },
     {
       "id": 2,
       "type": "CLIPLoader",
       "pos": [
-        -1200,
-        -150
+        1000,
+        1120
       ],
       "size": [
-        300,
-        90
+        410,
+        115
       ],
       "flags": {},
       "order": 1,
@@ -63,7 +64,8 @@
         "Node name for S&R": "CLIPLoader"
       },
       "widgets_values": [
-        "qwen_3_vl_7b_bf16.safetensors",
+        "qwen3vl_32b_minimax_h3_bf16.safetensors",
+        "minimax",
         "default"
       ]
     },
@@ -71,12 +73,12 @@
       "id": 3,
       "type": "VAELoader",
       "pos": [
-        -1200,
-        -20
+        1000,
+        1270
       ],
       "size": [
-        300,
-        90
+        410,
+        75
       ],
       "flags": {},
       "order": 2,
@@ -88,7 +90,8 @@
           "type": "VAE",
           "links": [
             3,
-            15
+            19,
+            22
           ],
           "slot_index": 0
         }
@@ -96,21 +99,21 @@
       "properties": {
         "Node name for S&R": "VAELoader"
       },
-      "title": "VAELoader (Video)",
+      "title": "VAELoader (Video VAE)",
       "widgets_values": [
-        "minimax_h3_video_vae.safetensors"
+        "minimax_h3_video_vae_fp16.safetensors"
       ]
     },
     {
       "id": 4,
       "type": "VAELoader",
       "pos": [
-        -1200,
-        110
+        1000,
+        1380
       ],
       "size": [
-        300,
-        90
+        410,
+        75
       ],
       "flags": {},
       "order": 3,
@@ -120,70 +123,34 @@
         {
           "name": "VAE",
           "type": "VAE",
-          "links": [],
+          "links": [
+            4,
+            20
+          ],
           "slot_index": 0
         }
       ],
       "properties": {
         "Node name for S&R": "VAELoader"
       },
-      "title": "VAELoader (Audio)",
+      "title": "VAELoader (Audio VAE)",
       "widgets_values": [
-        "minimax_h3_audio_vae.safetensors"
+        "minimax_h3_audio_vae_fp32.safetensors"
       ]
     },
     {
       "id": 5,
-      "type": "CLIPTextEncode",
-      "pos": [
-        -820,
-        -280
-      ],
-      "size": [
-        350,
-        140
-      ],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "clip",
-          "type": "CLIP",
-          "link": 2
-        }
-      ],
-      "outputs": [
-        {
-          "name": "CONDITIONING",
-          "type": "CONDITIONING",
-          "links": [
-            4
-          ],
-          "slot_index": 0
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "CLIPTextEncode"
-      },
-      "title": "Prompt (Positive Conditioning)",
-      "widgets_values": [
-        "Cinematic slow motion, camera moving forward smoothly, high quality 4k render, detailed lighting"
-      ]
-    },
-    {
-      "id": 6,
       "type": "MiniMaxPrefixCacheConfig",
       "pos": [
-        -820,
-        -100
+        1460,
+        1000
       ],
       "size": [
-        350,
+        360,
         180
       ],
       "flags": {},
-      "order": 5,
+      "order": 4,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -192,8 +159,8 @@
           "type": "MINIMAX_CACHE_CONFIG",
           "links": [
             5,
-            11,
-            16
+            14,
+            17
           ],
           "slot_index": 0
         }
@@ -211,67 +178,192 @@
       ]
     },
     {
-      "id": 7,
-      "type": "MiniMaxH3SigmaShift",
+      "id": 6,
+      "type": "LoadImage",
       "pos": [
-        -820,
-        120
+        1460,
+        1210
       ],
       "size": [
-        350,
-        80
+        360,
+        250
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "title": "Reference Image (Character / Style)",
+      "widgets_values": [
+        "reference_portrait.png",
+        "image"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        1860,
+        1000
+      ],
+      "size": [
+        440,
+        240
       ],
       "flags": {},
       "order": 6,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 1
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "name": "MODEL",
-          "type": "MODEL",
+          "name": "STRING",
+          "type": "STRING",
           "links": [
-            6
+            7
           ],
           "slot_index": 0
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3SigmaShift"
+        "Node name for S&R": "PrimitiveStringMultiline"
       },
+      "title": "Prompt (Detailed Description & Soundscape)",
       "widgets_values": [
-        3.0
+        "integrated_multimodal_description: [Shot 1] The camera performs a smooth tracking push-in. The character takes a confident step forward, gazing into the horizon under dynamic sunset lighting, hair gently swaying with the breeze.\n\noverall_soundscape: Soft ambient wind whistling, calm natural atmosphere.\n\nnon_diegetic_music: Gentle orchestral strings building emotion."
       ]
     },
     {
       "id": 8,
-      "type": "MiniMaxPrefixCacheApplier",
+      "type": "MiniMaxH3ReferenceToVideo",
       "pos": [
-        -420,
-        -280
+        1860,
+        1270
       ],
       "size": [
-        360,
-        240
+        440,
+        340
       ],
       "flags": {},
       "order": 7,
       "mode": 0,
       "inputs": [
         {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 2
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 3
+        },
+        {
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 4
+        },
+        {
+          "name": "ref_images.ref_image_0",
+          "type": "IMAGE",
+          "link": 6
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 7
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null
+        },
+        {
+          "name": "length",
+          "type": "INT",
+          "link": null
+        },
+        {
+          "name": "ref_image_size",
+          "type": "COMBO"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            9
+          ],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ReferenceToVideo"
+      },
+      "title": "MiniMax H3 Reference To Video (Canvas & Conditioning)",
+      "widgets_values": [
+        "",
+        768,
+        768,
+        124,
+        "max"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "MiniMaxPrefixCacheApplier",
+      "pos": [
+        2350,
+        1000
+      ],
+      "size": [
+        380,
+        240
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
           "name": "model",
           "type": "MODEL",
-          "link": 6
+          "link": 1
         },
         {
           "name": "conditioning",
           "type": "CONDITIONING",
-          "link": 4
+          "link": 8
         },
         {
           "name": "cache_config",
@@ -304,7 +396,8 @@
           "name": "model",
           "type": "MODEL",
           "links": [
-            7
+            10,
+            11
           ],
           "slot_index": 0
         },
@@ -312,7 +405,7 @@
           "name": "conditioning",
           "type": "CONDITIONING",
           "links": [
-            8
+            12
           ],
           "slot_index": 1
         },
@@ -320,9 +413,9 @@
           "name": "session",
           "type": "MINIMAX_SESSION",
           "links": [
-            9,
-            12,
-            17
+            13,
+            15,
+            18
           ],
           "slot_index": 2
         }
@@ -330,54 +423,18 @@
       "properties": {
         "Node name for S&R": "MiniMaxPrefixCacheApplier"
       },
-      "title": "MiniMax H3 Prefix Cache Applier"
-    },
-    {
-      "id": 11,
-      "type": "EmptyLatentVideo",
-      "pos": [
-        -420,
-        0
-      ],
-      "size": [
-        360,
-        100
-      ],
-      "flags": {},
-      "order": 8,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "LATENT",
-          "type": "LATENT",
-          "links": [
-            10
-          ],
-          "slot_index": 0
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "EmptyLatentVideo"
-      },
-      "title": "EmptyLatentVideo (124 Frames)",
-      "widgets_values": [
-        768,
-        768,
-        124,
-        1
-      ]
+      "title": "MiniMax H3 Prefix Cache Applier (Hook & Warmup)"
     },
     {
       "id": 10,
-      "type": "KSampler",
+      "type": "BasicGuider",
       "pos": [
-        -420,
-        140
+        2780,
+        1000
       ],
       "size": [
-        360,
-        220
+        240,
+        60
       ],
       "flags": {},
       "order": 9,
@@ -386,68 +443,221 @@
         {
           "name": "model",
           "type": "MODEL",
-          "link": 7
-        },
-        {
-          "name": "positive",
-          "type": "CONDITIONING",
-          "link": 8
-        },
-        {
-          "name": "negative",
-          "type": "CONDITIONING",
-          "link": null
-        },
-        {
-          "name": "latent_image",
-          "type": "LATENT",
           "link": 10
+        },
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 12
         }
       ],
       "outputs": [
         {
-          "name": "LATENT",
-          "type": "LATENT",
+          "name": "GUIDER",
+          "type": "GUIDER",
           "links": [
-            13,
-            18
+            25
           ],
           "slot_index": 0
         }
       ],
       "properties": {
-        "Node name for S&R": "KSampler"
+        "Node name for S&R": "BasicGuider"
       },
-      "title": "KSampler (DiT Prefix Accelerated)",
-      "widgets_values": [
-        42,
-        "fixed",
-        25,
-        6.0,
-        "euler",
-        "beta",
-        1.0
-      ]
+      "color": "#232",
+      "bgcolor": "#353"
     },
     {
-      "id": 15,
-      "type": "MiniMaxTrimPrefixLatent",
+      "id": 11,
+      "type": "BasicScheduler",
       "pos": [
-        0,
-        -280
+        2780,
+        1090
       ],
       "size": [
-        340,
-        160
+        240,
+        110
       ],
       "flags": {},
       "order": 10,
       "mode": 0,
       "inputs": [
         {
+          "name": "model",
+          "type": "MODEL",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            26
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicScheduler"
+      },
+      "widgets_values": [
+        "beta",
+        20,
+        1.0
+      ]
+    },
+    {
+      "id": 12,
+      "type": "KSamplerSelect",
+      "pos": [
+        2780,
+        1230
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            27
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSamplerSelect"
+      },
+      "widgets_values": [
+        "er_sde"
+      ],
+      "color": "#232",
+      "bgcolor": "#353"
+    },
+    {
+      "id": 13,
+      "type": "RandomNoise",
+      "pos": [
+        2780,
+        1320
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "NOISE",
+          "type": "NOISE",
+          "links": [
+            28
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "RandomNoise"
+      },
+      "widgets_values": [
+        1109045794973622,
+        "randomize"
+      ]
+    },
+    {
+      "id": 14,
+      "type": "SamplerCustomAdvanced",
+      "pos": [
+        3060,
+        1000
+      ],
+      "size": [
+        260,
+        320
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "noise",
+          "type": "NOISE",
+          "link": 28
+        },
+        {
+          "name": "guider",
+          "type": "GUIDER",
+          "link": 25
+        },
+        {
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 27
+        },
+        {
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 26
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "LATENT",
+          "links": [
+            29,
+            30
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "denoised_output",
+          "type": "LATENT",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SamplerCustomAdvanced"
+      },
+      "title": "SamplerCustomAdvanced (DiT Accelerated)",
+      "color": "#232",
+      "bgcolor": "#353"
+    },
+    {
+      "id": 15,
+      "type": "MiniMaxTrimPrefixLatent",
+      "pos": [
+        3400,
+        850
+      ],
+      "size": [
+        350,
+        160
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
           "name": "video_latent",
           "type": "LATENT",
-          "link": 13
+          "link": 29
         },
         {
           "name": "audio",
@@ -457,19 +667,16 @@
         {
           "name": "session",
           "type": "MINIMAX_SESSION",
-          "link": 12
+          "link": 13
         },
         {
           "name": "cache_config",
           "type": "MINIMAX_CACHE_CONFIG",
-          "link": 11
+          "link": 14
         },
         {
           "name": "trim_frames",
           "type": "INT",
-          "widget": {
-            "name": "trim_frames"
-          },
           "link": null
         }
       ],
@@ -478,7 +685,7 @@
           "name": "trimmed_video",
           "type": "LATENT",
           "links": [
-            14
+            31
           ],
           "slot_index": 0
         },
@@ -492,35 +699,35 @@
       "properties": {
         "Node name for S&R": "MiniMaxTrimPrefixLatent"
       },
-      "title": "Auto-Crop: Trim Prefix Latent",
+      "title": "MiniMax H3 Trim Prefix Latent (Auto-Crop)",
       "widgets_values": [
         0
       ]
     },
     {
-      "id": 13,
+      "id": 16,
       "type": "VAEDecode",
       "pos": [
-        380,
-        -280
+        3790,
+        850
       ],
       "size": [
         210,
-        100
+        60
       ],
       "flags": {},
-      "order": 11,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
           "name": "samples",
           "type": "LATENT",
-          "link": 14
+          "link": 31
         },
         {
           "name": "vae",
           "type": "VAE",
-          "link": 3
+          "link": 19
         }
       ],
       "outputs": [
@@ -528,7 +735,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            19
+            32
           ],
           "slot_index": 0
         }
@@ -536,60 +743,131 @@
       "properties": {
         "Node name for S&R": "VAEDecode"
       },
-      "title": "VAEDecode (Clean Single Clip)"
+      "title": "VAEDecode (Clean Video Clip)",
+      "color": "#232",
+      "bgcolor": "#353"
     },
     {
-      "id": 14,
-      "type": "SaveAnimatedPNG",
+      "id": 17,
+      "type": "VAEDecodeAudio",
       "pos": [
-        630,
-        -280
+        3790,
+        940
       ],
       "size": [
-        300,
-        120
+        210,
+        60
       ],
       "flags": {},
-      "order": 12,
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 31
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 20
+        }
+      ],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            33
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecodeAudio"
+      },
+      "title": "VAEDecodeAudio (Clean Audio Clip)",
+      "color": "#232",
+      "bgcolor": "#353"
+    },
+    {
+      "id": 18,
+      "type": "VHS_VideoCombine",
+      "pos": [
+        4040,
+        850
+      ],
+      "size": [
+        360,
+        280
+      ],
+      "flags": {},
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
           "name": "images",
           "type": "IMAGE",
-          "link": 19
+          "link": 32
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 33
+        },
+        {
+          "name": "meta_batch",
+          "type": "VHS_BatchManager"
+        },
+        {
+          "name": "vae",
+          "type": "VAE"
         }
       ],
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "Filenames",
+          "type": "VHS_FILENAMES",
+          "links": [],
+          "slot_index": 0
+        }
+      ],
       "properties": {
-        "Node name for S&R": "SaveAnimatedPNG"
+        "Node name for S&R": "VHS_VideoCombine"
       },
-      "title": "Save Clean Video Clip (0 Overlap)",
-      "widgets_values": [
-        "MiniMaxH3_CleanClip_part2",
-        24,
-        false,
-        100
-      ]
+      "title": "Save Clean Clip (0 Overlap, 0 Rewind)",
+      "widgets_values": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "minimax_h3_clean_clip",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 18,
+        "save_metadata": false,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true
+      }
     },
     {
-      "id": 12,
+      "id": 19,
       "type": "MiniMaxLongVideoStitcher",
       "pos": [
-        0,
-        80
+        3400,
+        1200
       ],
       "size": [
-        340,
-        230
+        350,
+        240
       ],
       "flags": {},
-      "order": 13,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
           "name": "current_video",
           "type": "LATENT",
-          "link": 18
+          "link": 30
         },
         {
           "name": "previous_video",
@@ -609,35 +887,26 @@
         {
           "name": "session",
           "type": "MINIMAX_SESSION",
-          "link": 17
+          "link": 15
         },
         {
           "name": "cache_config",
           "type": "MINIMAX_CACHE_CONFIG",
-          "link": 16
+          "link": 17
         },
         {
           "name": "trim_frames",
           "type": "INT",
-          "widget": {
-            "name": "trim_frames"
-          },
           "link": null
         },
         {
           "name": "latent_blend_steps",
           "type": "INT",
-          "widget": {
-            "name": "latent_blend_steps"
-          },
           "link": null
         },
         {
           "name": "audio_crossfade_ms",
           "type": "INT",
-          "widget": {
-            "name": "audio_crossfade_ms"
-          },
           "link": null
         }
       ],
@@ -646,7 +915,7 @@
           "name": "stitched_video",
           "type": "LATENT",
           "links": [
-            20
+            34
           ],
           "slot_index": 0
         },
@@ -672,7 +941,7 @@
       "properties": {
         "Node name for S&R": "MiniMaxLongVideoStitcher"
       },
-      "title": "MiniMax H3 Long Video Stitcher",
+      "title": "MiniMax H3 Long Video Stitcher (S-Curve & Crossfade)",
       "widgets_values": [
         0,
         2,
@@ -680,29 +949,29 @@
       ]
     },
     {
-      "id": 16,
+      "id": 20,
       "type": "VAEDecode",
       "pos": [
-        380,
-        80
+        3790,
+        1200
       ],
       "size": [
         210,
-        100
+        60
       ],
       "flags": {},
-      "order": 14,
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
           "name": "samples",
           "type": "LATENT",
-          "link": 20
+          "link": 34
         },
         {
           "name": "vae",
           "type": "VAE",
-          "link": 15
+          "link": 22
         }
       ],
       "outputs": [
@@ -710,7 +979,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            21
+            35
           ],
           "slot_index": 0
         }
@@ -718,60 +987,88 @@
       "properties": {
         "Node name for S&R": "VAEDecode"
       },
-      "title": "VAEDecode (Stitched Full Video)"
+      "title": "VAEDecode (Stitched Long Video)",
+      "color": "#232",
+      "bgcolor": "#353"
     },
     {
-      "id": 17,
-      "type": "SaveAnimatedPNG",
+      "id": 21,
+      "type": "VHS_VideoCombine",
       "pos": [
-        630,
-        80
+        4040,
+        1200
       ],
       "size": [
-        300,
-        120
+        360,
+        280
       ],
       "flags": {},
-      "order": 15,
+      "order": 20,
       "mode": 0,
       "inputs": [
         {
           "name": "images",
           "type": "IMAGE",
-          "link": 21
+          "link": 35
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "meta_batch",
+          "type": "VHS_BatchManager"
+        },
+        {
+          "name": "vae",
+          "type": "VAE"
         }
       ],
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "Filenames",
+          "type": "VHS_FILENAMES",
+          "links": [],
+          "slot_index": 0
+        }
+      ],
       "properties": {
-        "Node name for S&R": "SaveAnimatedPNG"
+        "Node name for S&R": "VHS_VideoCombine"
       },
-      "title": "Save Stitched Long Video",
-      "widgets_values": [
-        "MiniMaxH3_Stitched_LongVideo",
-        24,
-        false,
-        100
-      ]
+      "title": "Save Stitched Long Video (Full Continuous)",
+      "widgets_values": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "minimax_h3_stitched_long_video",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 18,
+        "save_metadata": false,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true
+      }
     },
     {
-      "id": 9,
+      "id": 22,
       "type": "MiniMaxCacheMonitor",
       "pos": [
-        -420,
-        420
+        2350,
+        1300
       ],
       "size": [
-        360,
-        100
+        380,
+        110
       ],
       "flags": {},
-      "order": 16,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
           "name": "session",
           "type": "MINIMAX_SESSION",
-          "link": 9
+          "link": 18
         }
       ],
       "outputs": [
@@ -793,7 +1090,7 @@
       1,
       1,
       0,
-      7,
+      9,
       0,
       "MODEL"
     ],
@@ -801,7 +1098,7 @@
       2,
       2,
       0,
-      5,
+      8,
       0,
       "CLIP"
     ],
@@ -809,210 +1106,319 @@
       3,
       3,
       0,
-      13,
+      8,
       1,
       "VAE"
     ],
     [
       4,
-      5,
-      0,
-      8,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      5,
-      6,
+      4,
       0,
       8,
       2,
-      "MINIMAX_CACHE_CONFIG"
-    ],
-    [
-      6,
-      7,
-      0,
-      8,
-      0,
-      "MODEL"
-    ],
-    [
-      7,
-      8,
-      0,
-      10,
-      0,
-      "MODEL"
-    ],
-    [
-      8,
-      8,
-      1,
-      10,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      9,
-      8,
-      2,
-      9,
-      0,
-      "MINIMAX_SESSION"
-    ],
-    [
-      10,
-      11,
-      0,
-      10,
-      3,
-      "LATENT"
-    ],
-    [
-      11,
-      6,
-      0,
-      15,
-      3,
-      "MINIMAX_CACHE_CONFIG"
-    ],
-    [
-      12,
-      8,
-      2,
-      15,
-      2,
-      "MINIMAX_SESSION"
-    ],
-    [
-      13,
-      10,
-      0,
-      15,
-      0,
-      "LATENT"
-    ],
-    [
-      14,
-      15,
-      0,
-      13,
-      0,
-      "LATENT"
-    ],
-    [
-      15,
-      3,
-      0,
-      16,
-      1,
       "VAE"
     ],
     [
-      16,
-      6,
-      0,
-      12,
       5,
+      5,
+      0,
+      9,
+      2,
+      "MINIMAX_CACHE_CONFIG"
+    ],
+    [
+      14,
+      5,
+      0,
+      15,
+      3,
       "MINIMAX_CACHE_CONFIG"
     ],
     [
       17,
+      5,
+      0,
+      19,
+      5,
+      "MINIMAX_CACHE_CONFIG"
+    ],
+    [
+      6,
+      6,
+      0,
       8,
-      2,
+      3,
+      "IMAGE"
+    ],
+    [
+      7,
+      7,
+      0,
+      8,
+      4,
+      "STRING"
+    ],
+    [
+      8,
+      8,
+      0,
+      9,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      9,
+      8,
+      1,
+      14,
+      4,
+      "LATENT"
+    ],
+    [
+      10,
+      9,
+      0,
+      10,
+      0,
+      "MODEL"
+    ],
+    [
+      11,
+      9,
+      0,
+      11,
+      0,
+      "MODEL"
+    ],
+    [
       12,
+      9,
+      1,
+      10,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      13,
+      9,
+      2,
+      15,
+      2,
+      "MINIMAX_SESSION"
+    ],
+    [
+      15,
+      9,
+      2,
+      19,
       4,
       "MINIMAX_SESSION"
     ],
     [
       18,
+      9,
+      2,
+      22,
+      0,
+      "MINIMAX_SESSION"
+    ],
+    [
+      25,
       10,
       0,
+      14,
+      1,
+      "GUIDER"
+    ],
+    [
+      26,
+      11,
+      0,
+      14,
+      3,
+      "SIGMAS"
+    ],
+    [
+      27,
       12,
+      0,
+      14,
+      2,
+      "SAMPLER"
+    ],
+    [
+      28,
+      13,
+      0,
+      14,
+      0,
+      "NOISE"
+    ],
+    [
+      29,
+      14,
+      0,
+      15,
+      0,
+      "LATENT"
+    ],
+    [
+      30,
+      14,
+      0,
+      19,
+      0,
+      "LATENT"
+    ],
+    [
+      31,
+      15,
+      0,
+      16,
       0,
       "LATENT"
     ],
     [
       19,
-      13,
+      3,
       0,
-      14,
+      16,
+      1,
+      "VAE"
+    ],
+    [
+      20,
+      4,
+      0,
+      17,
+      1,
+      "VAE"
+    ],
+    [
+      32,
+      16,
+      0,
+      18,
       0,
       "IMAGE"
     ],
     [
-      20,
-      12,
+      33,
+      17,
       0,
-      16,
+      18,
+      1,
+      "AUDIO"
+    ],
+    [
+      34,
+      19,
+      0,
+      20,
       0,
       "LATENT"
     ],
     [
-      21,
-      16,
+      22,
+      3,
       0,
-      17,
+      20,
+      1,
+      "VAE"
+    ],
+    [
+      35,
+      20,
+      0,
+      21,
       0,
       "IMAGE"
     ]
   ],
   "groups": [
     {
-      "title": "1. 模型与编码器加载 (Model & Encoders)",
+      "id": 1,
+      "title": "1. 模型与编码器加载 (Model & VAE Loaders)",
       "bounding": [
-        -1250,
-        -340,
-        380,
-        580
+        960,
+        930,
+        470,
+        560
       ],
       "color": "#2a4d69",
       "font_size": 22
     },
     {
-      "title": "2. Prefix KV 缓存引擎与真实物理帧配置 (Prefix Cache Engine)",
+      "id": 2,
+      "title": "2. Prefix KV 缓存配置与参考图 (Prefix Cache & Ref Image)",
       "bounding": [
-        -850,
-        -340,
-        410,
-        580
+        1440,
+        930,
+        390,
+        560
       ],
       "color": "#20634c",
       "font_size": 22
     },
     {
-      "title": "3. 键值复用 DiT 降噪采样加速 (DiT KSampler: 45% Faster)",
+      "id": 3,
+      "title": "3. MiniMax H3 官方条件与画布准备 (ReferenceToVideo Conditioning)",
       "bounding": [
-        -430,
-        -340,
-        410,
-        740
+        1840,
+        930,
+        470,
+        710
       ],
       "color": "#8b572a",
       "font_size": 22
     },
     {
-      "title": "4. 方案 A: 自动剔除前缀独立导出 (Auto-Crop Clean Single Clip)",
+      "id": 4,
+      "title": "4. 键值复用 DiT 降噪采样加速 (DiT KSampler: 45% Faster)",
       "bounding": [
-        -20,
-        -340,
-        980,
+        2320,
+        930,
+        1020,
+        510
+      ],
+      "color": "#3f789e",
+      "font_size": 22
+    },
+    {
+      "id": 5,
+      "title": "5. 方案 A: 自动剔除前缀重复帧 (Auto-Crop Clean Single Clip)",
+      "bounding": [
+        3360,
+        770,
+        1070,
         380
       ],
       "color": "#4b3869",
       "font_size": 22
     },
     {
-      "title": "5. 方案 B: 双段潜空间平滑无缝拼接 (Seamless Long Video Synthesis)",
+      "id": 6,
+      "title": "6. 方案 B: 双段潜空间平滑无缝拼接 (Seamless Long Video Synthesis)",
       "bounding": [
-        -20,
-        60,
-        980,
+        3360,
+        1140,
+        1070,
         380
       ],
       "color": "#2d5d7b",
       "font_size": 22
+    },
+    {
+      "id": 7,
+      "title": "7. 显存与切片遥测监控 (Cache Monitor)",
+      "bounding": [
+        2320,
+        1260,
+        440,
+        180
+      ],
+      "color": "#432",
+      "font_size": 20
     }
   ],
   "config": {},
