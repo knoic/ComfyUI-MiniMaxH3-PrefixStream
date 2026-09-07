@@ -2,7 +2,7 @@
 
 Intercepts DiTBlock forward passes via ComfyUI transformer_options["patches_replace"]["dit"].
 In Warmup mode (Phase 0): extracts and caches Key/Value tensors for prefix frames.
-In Denoise mode (Phase 1): executes target-only QKV projection and MLP, attending to
+In Denoise mode (Phase 1): executes target-only QKV projection, attending to
 cached [K_prefix, K_target] and [V_prefix, V_target].
 """
 
@@ -34,7 +34,6 @@ def _apply_rope_and_norm(
     if rope_freqs is not None:
         q = q.view(1, s, heads, head_dim)
         k = k.view(1, s, heads, head_dim)
-        # Check comfy quant_ops or fallback
         try:
             import comfy.quant_ops
             import comfy.model_management
@@ -50,14 +49,12 @@ def _apply_rope_and_norm(
             q = q[0]
             k = k[0]
         except Exception:
-            # Fallback standard RMSNorm if comfy quant_ops is unavailable
             q = attn_module.q_norm(q.view(s, heads, head_dim))
             k = attn_module.k_norm(k.view(s, heads, head_dim))
     else:
         q = attn_module.q_norm(q.view(s, heads, head_dim))
         k = attn_module.k_norm(k.view(s, heads, head_dim))
 
-    # Standardize to [1, heads, S, head_dim]
     q = q.transpose(0, 1).unsqueeze(0)
     k = k.transpose(0, 1).unsqueeze(0)
     v = v.transpose(0, 1).unsqueeze(0)
@@ -66,21 +63,29 @@ def _apply_rope_and_norm(
 
 def create_prefix_dit_hook(
     cache_manager: PrefixKVCacheManager,
+    model: Optional[Any] = None,
     is_anchor_warmup: bool = False,
     is_rolling_warmup: bool = False
 ) -> Dict[Tuple[str, int], Callable]:
-    """Generates the patches_replace dictionary for all 50 DiT blocks.
-
-    Returns:
-        dict with keys ("double_block", layer_idx) matching ComfyUI patcher conventions.
-    """
+    """Generates the patches_replace dictionary for all 50 DiT blocks."""
     patches = {}
     num_layers = cache_manager.config.num_layers
 
+    # Extract blocks directly from model if available
+    blocks = None
+    if model is not None:
+        diff_model = getattr(model, "diffusion_model", model)
+        blocks = getattr(diff_model, "blocks", None)
+
     for layer_idx in range(num_layers):
+        attn_mod = None
+        if blocks is not None and layer_idx < len(blocks):
+            attn_mod = getattr(blocks[layer_idx], "attn", None)
+
         patches[("double_block", layer_idx)] = _make_block_patch(
             layer_idx=layer_idx,
             cache_manager=cache_manager,
+            attn_module=attn_mod,
             is_anchor_warmup=is_anchor_warmup,
             is_rolling_warmup=is_rolling_warmup
         )
@@ -90,40 +95,49 @@ def create_prefix_dit_hook(
 def _make_block_patch(
     layer_idx: int,
     cache_manager: PrefixKVCacheManager,
+    attn_module: Optional[nn.Module],
     is_anchor_warmup: bool,
     is_rolling_warmup: bool
 ) -> Callable:
     """Creates a closure for block i."""
 
+    def _resolve_attn(extra_options: Dict[str, Any]) -> Optional[nn.Module]:
+        if attn_module is not None:
+            return attn_module
+        if "attn_module" in extra_options and extra_options["attn_module"] is not None:
+            return extra_options["attn_module"]
+        # Introspect original_block closure
+        bw = extra_options.get("original_block")
+        if hasattr(bw, "__closure__") and bw.__closure__:
+            for cell in bw.__closure__:
+                val = cell.cell_contents
+                if hasattr(val, "attn"):
+                    return val.attn
+        return None
+
     def block_hook_fn(args: Dict[str, Any], extra_options: Dict[str, Any]) -> Dict[str, Any]:
         block_wrap = extra_options["original_block"]
         transformer_options = args.get("transformer_options", {})
         mode = transformer_options.get("minimax_prefix_mode", "normal")
+        attn_mod = _resolve_attn(extra_options)
 
         # -------------------------------------------------------------
         # Mode 1: Warmup Mode (Phase 0: Capture & Cache Key/Value)
         # -------------------------------------------------------------
         if mode == "warmup":
-            # Custom attention handler to record K, V during forward pass
             def warmup_attention(h_in, rope_freqs=None, transformer_options={}):
-                # Retrieve block reference from block_wrap closure
-                # Standard QKV projection
-                attn_mod = extra_options.get("attn_module")
                 if attn_mod is None:
-                    # Fallback: retrieve from block if accessible
                     return h_in
 
                 s = h_in.shape[0]
                 q, k, v = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
                 q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
 
-                # Store into cache manager
                 if is_anchor_warmup:
                     cache_manager.set_anchor_kv(layer_idx, k, v)
                 elif is_rolling_warmup:
                     cache_manager.set_rolling_kv(layer_idx, k, v)
 
-                # Continue forward to next block
                 out = asymmetric_cached_attention(
                     q, k, v,
                     num_heads=attn_mod.heads,
@@ -131,40 +145,31 @@ def _make_block_patch(
                 )
                 return attn_mod.out_proj(out)
 
-            # Run original block with warmup_attention injected if supported
-            return block_wrap(args)
+            args_with_attn = dict(args)
+            args_with_attn["attention"] = warmup_attention
+            return block_wrap(args_with_attn)
 
         # -------------------------------------------------------------
         # Mode 2: Denoising Mode (Phase 1: Reuse Prefix KV Cache)
         # -------------------------------------------------------------
-        if mode == "denoise" and cache_manager.has_cache(layer_idx):
-            # Prefetch next layer to overlap CPU->GPU transfer with current layer compute
+        if mode == "denoise" and cache_manager.has_cache(layer_idx) and attn_mod is not None:
             next_layer = layer_idx + 1
             cache_manager.prefetch_next_layer(next_layer, args["img"].device)
 
             def cached_attention(h_in, rope_freqs=None, transformer_options={}):
-                attn_mod = extra_options.get("attn_module")
-                if attn_mod is None:
-                    return h_in
-
-                # Target-only QKV projection
                 s = h_in.shape[0]
                 q_t, k_t, v_t = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
                 q_t, k_t, v_t = _apply_rope_and_norm(attn_mod, q_t, k_t, v_t, rope_freqs)
 
-                # Fetch cached prefix KV
                 k_prefix, v_prefix = cache_manager.get_combined_kv(
                     layer_idx=layer_idx,
                     target_device=q_t.device,
                     compute_dtype=q_t.dtype
                 )
 
-                # Concatenate [K_prefix, K_target] along sequence dimension
-                # Both are [1, heads, S, head_dim]
                 k_total = torch.cat([k_prefix, k_t], dim=2)
                 v_total = torch.cat([v_prefix, v_t], dim=2)
 
-                # Compute asymmetric cross-attention
                 out = asymmetric_cached_attention(
                     q=q_t,
                     k_cached=k_total,
@@ -174,7 +179,6 @@ def _make_block_patch(
                 )
                 return attn_mod.out_proj(out)
 
-            # Delegate to block execution
             args_with_attn = dict(args)
             args_with_attn["attention"] = cached_attention
             return block_wrap(args_with_attn)

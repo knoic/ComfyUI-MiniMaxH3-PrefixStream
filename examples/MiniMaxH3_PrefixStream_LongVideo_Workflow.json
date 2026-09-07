@@ -1,6 +1,6 @@
 {
   "last_node_id": 25,
-  "last_link_id": 35,
+  "last_link_id": 14,
   "nodes": [
     {
       "id": 1,
@@ -265,6 +265,11 @@
           "link": 7
         },
         {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 5
+        },
+        {
           "name": "cache_config",
           "type": "MINIMAX_CACHE_CONFIG",
           "link": 6
@@ -300,12 +305,20 @@
           "slot_index": 0
         },
         {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "links": [
+            14
+          ],
+          "slot_index": 1
+        },
+        {
           "name": "session",
           "type": "MINIMAX_SESSION",
           "links": [
             9
           ],
-          "slot_index": 1
+          "slot_index": 2
         }
       ],
       "properties": {
@@ -370,7 +383,7 @@
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "link": 5
+          "link": 14
         },
         {
           "name": "negative",
@@ -603,7 +616,7 @@
       5,
       5,
       0,
-      10,
+      8,
       1,
       "CONDITIONING"
     ],
@@ -670,6 +683,14 @@
       14,
       0,
       "IMAGE"
+    ],
+    [
+      14,
+      8,
+      1,
+      10,
+      1,
+      "CONDITIONING"
     ]
   ],
   "groups": [

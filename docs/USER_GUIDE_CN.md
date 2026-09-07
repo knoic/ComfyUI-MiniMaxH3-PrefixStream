@@ -35,17 +35,19 @@
 
 ---
 
-### 2. `MiniMax Prefix Cache Applier`（核心注入器）
-连接在模型调度链上，负责在采样器运行前执行单步 Phase 0 预热（提取 KV），并将 Phase 1 降噪 Hook 注入到模型的 `model_options` 中。
+### 2. `MiniMax Prefix Cache Applier`（核心注入器与条件增强器）
+连接在模型调度链与提示词条件链上，负责在采样器运行前执行单步 Phase 0 预热（提取 KV），并将前缀帧绑定为 `minimax_keyframes` 注入到 `conditioning` 中，同时将 Phase 1 降噪 Hook 注入到模型的 `model_options` 中。
 
-* **连接方式**：
+* **连接方式（关键插槽）**：
   * `model`：连接自 `MiniMaxH3SigmaShift` 的输出端。
+  * `conditioning`：**必须连接自 `CLIPTextEncode` 的正面提示词输出**。
   * `cache_config`：连接自 `MiniMax Prefix Cache Config`。
-  * `anchor_video_latent` *(可选)*：连接初始首帧/参考图像编码后的 Latent（作为永久 Anchor）。
   * `context_video_latent` *(可选)*：连接上一段视频尾部输出的 Latent（作为动态 Rolling 上下文）。
+  * `anchor_video_latent` *(可选)*：连接初始首帧/参考图像编码后的 Latent（作为永久 Anchor）。
   * `context_audio` *(可选)*：连接上一段视频尾部的音频（实现音视频同步连续性）。
 * **输出**：
-  * `model`：已挂载极速 Block 级 Hook 的模型，直接输入给 `KSampler`。
+  * `model`：已挂载极速 Block 级 Hook 的模型，输入给 `KSampler` 的 `model`。
+  * `conditioning`：**已注入前置关键帧锚点的条件，输入给 `KSampler` 的 `positive`**。
   * `session`：当前长视频生成会话对象，用于传递给监视器或下一个切片。
 
 ---

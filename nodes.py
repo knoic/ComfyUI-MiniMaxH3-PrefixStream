@@ -59,13 +59,14 @@ class MiniMaxPrefixCacheConfigNode:
 
 
 class MiniMaxPrefixCacheApplierNode:
-    """Attaches Prefix KV Caching engine to MiniMax H3 model before diffusion sampling."""
+    """Attaches Prefix KV Caching engine to MiniMax H3 model and injects keyframe conditioning before diffusion sampling."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "model": ("MODEL",),
+                "conditioning": ("CONDITIONING",),
             },
             "optional": {
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
@@ -76,20 +77,21 @@ class MiniMaxPrefixCacheApplierNode:
             }
         }
 
-    RETURN_TYPES = ("MODEL", "MINIMAX_SESSION")
-    RETURN_NAMES = ("model", "session")
+    RETURN_TYPES = ("MODEL", "CONDITIONING", "MINIMAX_SESSION")
+    RETURN_NAMES = ("model", "conditioning", "session")
     FUNCTION = "apply_cache"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
     def apply_cache(
         self,
         model: Any,
+        conditioning: Any,
         cache_config: Optional[KVCacheConfig] = None,
         context_video_latent: Optional[Dict[str, Any]] = None,
         anchor_video_latent: Optional[Dict[str, Any]] = None,
         context_audio: Optional[Dict[str, Any]] = None,
         session: Optional[LongVideoSession] = None
-    ) -> Tuple[Any, LongVideoSession]:
+    ) -> Tuple[Any, Any, LongVideoSession]:
         # Initialize or retrieve active session
         cfg = cache_config or KVCacheConfig()
         sess = session or LongVideoSession(cfg)
@@ -99,15 +101,16 @@ class MiniMaxPrefixCacheApplierNode:
         v_anc = anchor_video_latent["samples"] if anchor_video_latent is not None else None
         a_ctx = context_audio["waveform"] if context_audio is not None else None
 
-        # Prepare next clip (handles Phase 0 warmup and Phase 1 hook injection)
-        patched_model = sess.prepare_next_clip(
+        # Prepare next clip (handles Phase 0 warmup, keyframe conditioning injection, and Phase 1 hook injection)
+        patched_model, out_cond = sess.prepare_next_clip(
             model_patcher=model,
+            conditioning=conditioning,
             previous_video_latent=v_ctx,
             previous_audio_latent=a_ctx,
             anchor_video_latent=v_anc
         )
 
-        return (patched_model, sess)
+        return (patched_model, out_cond, sess)
 
 
 class MiniMaxLongVideoStitcherNode:
@@ -200,3 +203,18 @@ class MiniMaxCacheMonitorNode:
             f"Accumulated Clips: {len(session.accumulated_video_latents)}"
         )
         return (report_str,)
+
+
+NODE_CLASS_MAPPINGS = {
+    "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
+    "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
+    "MiniMaxLongVideoStitcher": MiniMaxLongVideoStitcherNode,
+    "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxPrefixCacheConfig": "MiniMax H3 Prefix Cache Config",
+    "MiniMaxPrefixCacheApplier": "MiniMax H3 Prefix Cache Applier",
+    "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher",
+    "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
+}
