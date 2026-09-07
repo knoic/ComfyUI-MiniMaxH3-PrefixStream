@@ -52,23 +52,21 @@
 
 ---
 
-### 3. `MiniMax Trim Prefix Latent (Auto-Crop)`（自动剔除前缀重复帧节点）
+### 3. `MiniMax Trim Prefix Latent (Auto-Crop)`（自动剔除前缀重复帧节点 - 音视频统一）
 **【彻底告别手动剪映/PR裁剪】** 专用于一段一段导出独立 MP4 的场景。
-续写生成的视频开头必然包含约 1 秒的前置过渡重叠帧。接入本节点后，节点将**在潜空间层面直接无损切除注入的前缀**：
-- **输入**：`video_latent`（采样器输出的原生 Latent）、`session` 或 `cache_config`。
-- **输出**：`trimmed_video`（纯净新片段，直接连入 `VAEDecode` 导出即是干净的新画面，0 帧重复回放！）。
-- **附加优势**：直接在 Latent 上裁除，使得 VAE Decode 少解码 25% 图像，显著节省显存并加快解码。
+续写生成的视频开头必然包含前置过渡重叠帧。接入本节点后，节点将**在统一潜空间层面同时对画面 Latent 和音频 Latent 毫秒级无损裁切**：
+- **输入**：`latent`（采样器输出的原生 unified LATENT，内置 NestedTensor 视频+音频）、`session` 或 `cache_config`。
+- **输出**：`trimmed_latent`（纯净新切片统一 Latent，直接单线同时接入 `VAEDecode` 和 `VAEDecodeAudio`，0 帧重复回放，音画绝对对齐！）。
+- **附加优势**：直接在 Latent 上裁除，使得 VAE Decode 少解码 20%~30% 图像与音频，显著节省显存并加快解码。
 
 ---
 
-### 4. `MiniMax Long Video Stitcher`（无缝缝合与长视频合成节点）
-**【全自动长视频拼接】** 用于将 Clip 1 与 Clip 2 直接合成连续长视频的场景。
-- **输入**：`current_video`、`previous_video`、`session` 等。
+### 4. `MiniMax Long Video Stitcher`（无缝缝合与长视频合成节点 - 音画双轨 S 曲线）
+**【全自动长视频拼接】** 用于将 Clip 1 与 Clip 2 在潜空间直接合成连续超长视频的场景。
+- **输入**：`current_latent`、`previous_latent`、`session`、`cache_config`。
 - **输出**：
-  - `stitched_video`：**无缝长视频**。自动将两段视频的重合区在潜空间用平滑余弦 S 曲线混合消除硬缝，一键生成无缝超长大片！
-  - `trimmed_current_video`：当前切片的纯净新内容。
-  - `stitched_audio`：经过 50ms 等功率立体声淡入淡出后的拼接音频。
-  - `trimmed_current_audio`：纯净新切片音频。
+  - `stitched_latent`：**统一无缝长视频 Latent**。自动将两段视频与音频的重合区在潜空间用平滑余弦 S 曲线混合消除硬缝，单线直接接 `VAEDecode` 与 `VAEDecodeAudio`，一键生成无缝超长大片！
+  - `trimmed_current_latent`：当前切片的纯净新内容 Latent（音画合一）。
 
 ---
 
@@ -80,39 +78,50 @@
 ## 三、 实战工作流指南
 
 ### 场景一：单切片加速（图生视频 / 文生视频 40%+ 提速）
-适用于每次只渲染一段视频（如 6 秒），但在输入端提供了首帧图像或参考图像的场景：
+适用于每次只渲染一段视频（如 5 秒），但在输入端提供了首帧图像或参考图像的场景：
 1. `Load Image` $\to$ `VAEEncode` 得到参考 Latent。
-2. 将参考 Latent 接入 `MiniMax Prefix Cache Applier` 的 `anchor_video_latent` 插槽。
-3. `EmptyLatentVideo` 生成目标画幅（如 1280x720，37 步）。
-4. 执行 `KSampler`。在整个 25 步采样中，模型只对生成的 37 步计算 QKV 与 FFN，参考帧仅作为只读 KV 注入注意力层。
+2. 将参考 Latent 接入 `MiniMax Prefix Cache Applier` 的 `anchor_latent` 插槽。
+3. `EmptyLatentVideo` 生成目标画幅（如 1280x720，31 步）。
+4. 执行采样器。在整个采样中，模型只对生成的 31 步计算 QKV 与 FFN，参考帧仅作为只读 KV 注入注意力层。
 5. **实测表现**：计算量直降，且参考帧的角色还原度达到 100% 数学无损。
 
 ### 场景二：无限多段长视频连续续写（Infinite Video Chaining）
 适用于需要连续生成 10 秒、30 秒、1 分钟甚至更长故事视频的场景：
-1. **第 1 切片（生成 0~6 秒）**：
+1. **第 1 切片（生成 0~5.16 秒）**：
    - 正常文生视频或图生视频。
-   - 将生成的输出 Latent 命名为 `Clip1_Latent`。
-2. **第 2 切片（续写 6~12 秒）**：
-   - 将 `Clip1_Latent` 的首部接入 `anchor_video_latent`（锁定角色）。
-   - 将 `Clip1_Latent` 的尾部接入 `context_video_latent`（引导动作延续）。
-   - 运行采样器，生成速度相比从头计算全长序列提升约 **1.8x 倍**。
-   - 通过 `MiniMax Long Video Stitcher` 将 Clip 1 与 Clip 2 拼接。
+   - 保存输出的 unified Latent。
+2. **第 2 切片（续写 5~10 秒）**：
+   - 将第 1 切片的首部接入 `anchor_latent`（锁定主角五官外貌）。
+   - 将第 1 切片的尾部接入 `context_latent`（引导动作、运镜与声音延续）。
+   - 采样器生成速度相比传统全序列计算提升约 **1.8x 倍**。
+   - 通过 `MiniMax Long Video Stitcher` 将两段 Latent 缝合，直接接 VAE 解码导出超长无缝视频！
 3. **第 3~N 切片**：
-   - 保持 `anchor_video_latent` 始终为 Clip 1 的首帧（角色不崩塌）。
-   - 将上一切片的尾部传入 `context_video_latent`，滚动向前推进。
+   - 保持 `anchor_latent` 始终为 Clip 1 的首帧（主角永不崩塌）。
+   - 将上一切片的尾部传入 `context_latent`，滚动向前推进。
 
 ---
 
 ## 四、 常见问题与避坑指南 (FAQ)
 
-### Q1: 提示 `CUDA out of memory` (显存溢出) 怎么办？
+### Q1: 为什么之前滑动窗口参数最大只能填 16 帧？
+* **原因**：早期版本参数是以 **Latent 步数**（`rolling_latent_frames`）计量的，由于 MiniMax H3 的时间轴约 4 帧压成 1 步 Latent，16 步 Latent 实际上相当于 **64 实际视频帧**。部分用户误以为只能滑 16 帧（不足 1 秒）。
+* **已优化**：现已升级为直观的 **实际视频帧数** `rolling_frames`（范围 **4 ~ 124 帧**，最大可覆盖 124 帧单切片全长！）；对于保留旧节点的用户，兼容项上限也已放开至 64 步。
+* **⚠️ 重要提醒**：若界面滑块依然卡在 16，是因为 ComfyUI 只在启动时加载一次 Python 节点定义。**更新插件代码后必须完全重启 ComfyUI 后端服务，并在浏览器中按 `Ctrl + F5` 强制刷新页面**，才能载入最新的 124 帧控件定义。
+
+### Q2: 为什么画面和音频的 Latent 不用分开连线？
+* **MiniMax H3 的原生特性**：MiniMax H3 与传统单模态视频模型不同，它在生成时是音视频联合生成的，ComfyUI 官方将其打包为 `NestedTensor((video, audio))` 封装在同一个 `LATENT`（粉色端口）中。
+* **潜空间同步缝合/裁切**：本插件的 `TrimPrefixLatent` 与 `LongVideoStitcher` 原生识别并解包该结构，在 Latent 空间中同时按相同的时间比率无损裁切与余弦插值缝合，再原封不动打包为 unified LATENT。
+* **极简连线**：无需在缝合前将音频解码为波形，缝合节点输出的单个粉色 `stitched_latent` 端口直接分发连接给 `VAEDecode`（解码画面）与 `VAEDecodeAudio`（解码声音），音画自动严丝合缝、声画对齐！
+
+### Q3: 提示 `CUDA out of memory` (显存溢出) 怎么办？
 * **方案 A**：检查 `MiniMax Prefix Cache Config`，确保 `cache_dtype` 设置为 `fp8`（显存占用直接砍半）。
 * **方案 B**：将 `device_mode` 从 `gpu` 切换为 `cpu_pinned`。缓存将全部驻留在主机物理内存中，GPU 显存开销降为 0 MB。
-* **方案 C**：适当缩减 `rolling_latent_frames`（如从 8 调至 4~6）。
+* **方案 C**：适当缩减 `rolling_frames`（如设为 24 帧，约 1 秒过渡）。
 
-### Q2: 两段拼接处画面出现微小的闪烁或接缝怎么优化？
+### Q4: 两段拼接处画面出现微小的闪烁或接缝怎么优化？
 * MiniMax H3 原生包含轻微的随机噪声，将 `MiniMax Long Video Stitcher` 中的 `latent_blend_steps` 设置为 `2` 或 `3`，即可利用潜空间余弦插值消除光影跳跃。
 
-### Q3: 为什么这套方案比传统 Inpainting / Mask 续写更快更清晰？
+### Q5: 为什么这套方案比传统 Inpainting / Mask 续写更快更清晰？
 * **传统 Mask 续写**：全序列 Token 都还在 Transformer 里跑完整的 QKV 投影和 SwiGLU FFN，且每次重绘都要加噪去噪，误差随切片数指数累加（第 4 段开始画面容易融化）。
 * **Prefix KV Caching**：前缀帧只读冻结，没有重复加噪损耗，且跳过了前缀全部前向矩阵乘法，既快又稳。
+

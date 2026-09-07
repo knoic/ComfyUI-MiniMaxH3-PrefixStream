@@ -1,8 +1,8 @@
 {
   "id": "cd1ed691-6262-43d8-a31c-020f849a791b",
   "revision": 0,
-  "last_node_id": 374,
-  "last_link_id": 536,
+  "last_node_id": 375,
+  "last_link_id": 540,
   "nodes": [
     {
       "id": 93,
@@ -467,7 +467,6 @@
           "type": "LATENT",
           "links": [
             473,
-            474,
             529
           ]
         },
@@ -515,7 +514,7 @@
           "localized_name": "Latent",
           "name": "samples",
           "type": "LATENT",
-          "link": 474
+          "link": 537
         },
         {
           "label": "VAE",
@@ -547,7 +546,8 @@
         }
       },
       "color": "#232",
-      "bgcolor": "#353"
+      "bgcolor": "#353",
+      "title": "VAEDecodeAudio (Audio - Clean Clip)"
     },
     {
       "id": 97,
@@ -766,7 +766,7 @@
       },
       "color": "#232",
       "bgcolor": "#353",
-      "title": "VAEDecode (Clean Video Clip)"
+      "title": "VAEDecode (Video - Clean Clip)"
     },
     {
       "id": 105,
@@ -983,7 +983,7 @@
           }
         }
       },
-      "title": "Save Clean Video Clip (0 Overlap, 0 Rewind)"
+      "title": "Save Clean Video Clip (0 Overlap, AV Synced)"
     },
     {
       "id": 366,
@@ -1028,20 +1028,20 @@
           "link": null
         },
         {
-          "localized_name": "rolling_frames",
-          "name": "rolling_frames",
-          "type": "INT",
-          "widget": {
-            "name": "rolling_frames"
-          },
-          "link": null
-        },
-        {
           "localized_name": "anchor_frames",
           "name": "anchor_frames",
           "type": "INT",
           "widget": {
             "name": "anchor_frames"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "rolling_frames",
+          "name": "rolling_frames",
+          "type": "INT",
+          "widget": {
+            "name": "rolling_frames"
           },
           "link": null
         }
@@ -1073,17 +1073,17 @@
         "fp8",
         "auto",
         true,
-        22,
-        5
+        5,
+        24
       ],
       "widgets_values_named": {
         "cache_dtype": "fp8",
         "device_mode": "auto",
         "use_anchor": true,
-        "rolling_frames": 22,
-        "anchor_frames": 5
+        "anchor_frames": 5,
+        "rolling_frames": 24
       },
-      "title": "MiniMax H3 Prefix Cache Config (Real Frames)"
+      "title": "MiniMax H3 Prefix Cache Config (Real Video Frames)"
     },
     {
       "id": 87,
@@ -1444,7 +1444,8 @@
           "name": "*",
           "type": "*",
           "links": [
-            471
+            471,
+            539
           ]
         }
       ],
@@ -1556,24 +1557,17 @@
           "link": 518
         },
         {
-          "localized_name": "context_video_latent",
-          "name": "context_video_latent",
+          "localized_name": "context_latent",
+          "name": "context_latent",
           "shape": 7,
           "type": "LATENT",
           "link": 524
         },
         {
-          "localized_name": "anchor_video_latent",
-          "name": "anchor_video_latent",
+          "localized_name": "anchor_latent",
+          "name": "anchor_latent",
           "shape": 7,
           "type": "LATENT",
-          "link": null
-        },
-        {
-          "localized_name": "context_audio",
-          "name": "context_audio",
-          "shape": 7,
-          "type": "AUDIO",
           "link": null
         },
         {
@@ -1833,25 +1827,20 @@
       "type": "MiniMaxTrimPrefixLatent",
       "pos": [
         12130,
-        2880
+        2900
       ],
       "size": [
         340,
         160
       ],
       "flags": {},
-      "order": 22,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
-          "name": "video_latent",
+          "name": "latent",
           "type": "LATENT",
           "link": 473
-        },
-        {
-          "name": "audio",
-          "type": "AUDIO",
-          "link": null
         },
         {
           "name": "session",
@@ -1874,24 +1863,19 @@
       ],
       "outputs": [
         {
-          "name": "trimmed_video",
+          "name": "trimmed_latent",
           "type": "LATENT",
           "links": [
-            528
+            528,
+            537
           ],
           "slot_index": 0
-        },
-        {
-          "name": "trimmed_audio",
-          "type": "AUDIO",
-          "links": [],
-          "slot_index": 1
         }
       ],
       "properties": {
         "Node name for S&R": "MiniMaxTrimPrefixLatent"
       },
-      "title": "MiniMax H3 Trim Prefix Latent (Auto-Crop 0 Overlap)",
+      "title": "MiniMax H3 Trim Prefix Latent (Auto-Crop AV Latent)",
       "widgets_values": [
         0
       ]
@@ -1905,31 +1889,21 @@
       ],
       "size": [
         340,
-        240
+        220
       ],
       "flags": {},
       "order": 25,
       "mode": 0,
       "inputs": [
         {
-          "name": "current_video",
+          "name": "current_latent",
           "type": "LATENT",
           "link": 529
         },
         {
-          "name": "previous_video",
+          "name": "previous_latent",
           "type": "LATENT",
           "link": 530
-        },
-        {
-          "name": "current_audio",
-          "type": "AUDIO",
-          "link": null
-        },
-        {
-          "name": "previous_audio",
-          "type": "AUDIO",
-          "link": null
         },
         {
           "name": "session",
@@ -1956,52 +1930,32 @@
             "name": "latent_blend_steps"
           },
           "link": null
-        },
-        {
-          "name": "audio_crossfade_ms",
-          "type": "INT",
-          "widget": {
-            "name": "audio_crossfade_ms"
-          },
-          "link": null
         }
       ],
       "outputs": [
         {
-          "name": "stitched_video",
+          "name": "stitched_latent",
           "type": "LATENT",
           "links": [
-            533
+            533,
+            538
           ],
           "slot_index": 0
         },
         {
-          "name": "trimmed_current_video",
+          "name": "trimmed_current_latent",
           "type": "LATENT",
           "links": [],
           "slot_index": 1
-        },
-        {
-          "name": "stitched_audio",
-          "type": "AUDIO",
-          "links": [],
-          "slot_index": 2
-        },
-        {
-          "name": "trimmed_current_audio",
-          "type": "AUDIO",
-          "links": [],
-          "slot_index": 3
         }
       ],
       "properties": {
         "Node name for S&R": "MiniMaxLongVideoStitcher"
       },
-      "title": "MiniMax H3 Long Video Stitcher (S-Curve & Crossfade)",
+      "title": "MiniMax H3 Long Video Stitcher (Unified AV S-Curve)",
       "widgets_values": [
         0,
-        2,
-        50
+        2
       ]
     },
     {
@@ -2045,7 +1999,52 @@
       "properties": {
         "Node name for S&R": "VAEDecode"
       },
-      "title": "VAEDecode (Stitched Long Video)",
+      "title": "VAEDecode (Video - Stitched)",
+      "color": "#232",
+      "bgcolor": "#353"
+    },
+    {
+      "id": 375,
+      "type": "VAEDecodeAudio",
+      "pos": [
+        12514,
+        3550
+      ],
+      "size": [
+        230,
+        60
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 27,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 538
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 539
+        }
+      ],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            540
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecodeAudio"
+      },
+      "title": "VAEDecodeAudio (Audio - Stitched)",
       "color": "#232",
       "bgcolor": "#353"
     },
@@ -2061,7 +2060,7 @@
         600
       ],
       "flags": {},
-      "order": 27,
+      "order": 28,
       "mode": 0,
       "inputs": [
         {
@@ -2072,7 +2071,7 @@
         {
           "name": "audio",
           "type": "AUDIO",
-          "link": null
+          "link": 540
         },
         {
           "name": "meta_batch",
@@ -2094,7 +2093,7 @@
       "properties": {
         "Node name for S&R": "VHS_VideoCombine"
       },
-      "title": "Save Stitched Long Video (Full Continuous)",
+      "title": "Save Stitched Long Video (Full Continuous AV)",
       "widgets_values": {
         "frame_rate": 24,
         "loop_count": 0,
@@ -2120,7 +2119,7 @@
         110
       ],
       "flags": {},
-      "order": 28,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -2257,14 +2256,6 @@
       "LATENT"
     ],
     [
-      474,
-      79,
-      0,
-      344,
-      0,
-      "LATENT"
-    ],
-    [
       484,
       343,
       0,
@@ -2357,7 +2348,7 @@
       367,
       2,
       370,
-      2,
+      1,
       "MINIMAX_SESSION"
     ],
     [
@@ -2365,7 +2356,7 @@
       366,
       0,
       370,
-      3,
+      2,
       "MINIMAX_CACHE_CONFIG"
     ],
     [
@@ -2373,6 +2364,14 @@
       370,
       0,
       343,
+      0,
+      "LATENT"
+    ],
+    [
+      537,
+      370,
+      0,
+      344,
       0,
       "LATENT"
     ],
@@ -2397,7 +2396,7 @@
       367,
       2,
       371,
-      4,
+      2,
       "MINIMAX_SESSION"
     ],
     [
@@ -2405,7 +2404,7 @@
       366,
       0,
       371,
-      5,
+      3,
       "MINIMAX_CACHE_CONFIG"
     ],
     [
@@ -2413,6 +2412,14 @@
       371,
       0,
       372,
+      0,
+      "LATENT"
+    ],
+    [
+      538,
+      371,
+      0,
+      375,
       0,
       "LATENT"
     ],
@@ -2425,12 +2432,28 @@
       "VAE"
     ],
     [
+      539,
+      342,
+      0,
+      375,
+      1,
+      "VAE"
+    ],
+    [
       535,
       372,
       0,
       373,
       0,
       "IMAGE"
+    ],
+    [
+      540,
+      375,
+      0,
+      373,
+      1,
+      "AUDIO"
     ],
     [
       536,
@@ -2444,15 +2467,14 @@
   "groups": [
     {
       "id": 3,
-      "title": "MiniMax H3 PrefixStream 终极生产模板 (Step 2 续写 / 双轨前缀缓存 / 自动切除前缀 / 无缝缝合)",
+      "title": "step2",
       "bounding": [
-        9000,
-        2350,
-        5300,
-        1850
+        9953.845703125,
+        2863.001953125,
+        3099.54638671875,
+        759.4124145507812
       ],
-      "color": "#1f4068",
-      "font_size": 26,
+      "color": "#3f789e",
       "flags": {}
     }
   ],

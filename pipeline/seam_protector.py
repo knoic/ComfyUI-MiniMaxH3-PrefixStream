@@ -94,6 +94,34 @@ def stitch_video_latents(
     return torch.cat([prev_head, blended_overlap, curr_tail], dim=2)
 
 
+def stitch_audio_latents(
+    prev_latent: torch.Tensor,
+    curr_latent: torch.Tensor,
+    overlap_steps: int,
+    blend_steps: int = 2
+) -> torch.Tensor:
+    """Stitches two contiguous 4D audio latents [B, 32, 2, T], seamlessly blending the overlap region."""
+    if overlap_steps <= 0 or prev_latent is None:
+        return curr_latent
+
+    ov = min(overlap_steps, prev_latent.shape[-1], curr_latent.shape[-1])
+    if ov <= 0:
+        return torch.cat([prev_latent, curr_latent], dim=-1)
+
+    prev_head = prev_latent[..., :-ov]
+    prev_overlap = prev_latent[..., -ov:]
+    curr_overlap = curr_latent[..., :ov]
+    curr_tail = curr_latent[..., ov:]
+
+    t = torch.linspace(0.0, math.pi / 2, ov, device=curr_latent.device, dtype=curr_latent.dtype)
+    alpha = torch.sin(t) ** 2
+    while alpha.ndim < curr_latent.ndim:
+        alpha = alpha.unsqueeze(0)
+
+    blended_overlap = (1.0 - alpha) * prev_overlap + alpha * curr_overlap
+    return torch.cat([prev_head, blended_overlap, curr_tail], dim=-1)
+
+
 def trim_prefix_frames(
     full_video_latent: torch.Tensor,
     prefix_latent_steps: int
@@ -116,3 +144,16 @@ def trim_audio_waveform(
     if trim_samples >= waveform.shape[-1]:
         return waveform
     return waveform[..., trim_samples:]
+
+
+def trim_audio_latents(
+    full_audio_latent: torch.Tensor,
+    prefix_audio_steps: int
+) -> torch.Tensor:
+    """Trims leading overlap steps from a 4D audio latent [B, 32, 2, T]."""
+    if prefix_audio_steps <= 0 or full_audio_latent is None:
+        return full_audio_latent
+    if prefix_audio_steps >= full_audio_latent.shape[-1]:
+        return full_audio_latent
+    return full_audio_latent[..., prefix_audio_steps:]
+
