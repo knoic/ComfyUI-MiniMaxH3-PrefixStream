@@ -57,15 +57,25 @@ class MiniMaxPrefixCacheConfigNode:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "cache_mode": ([
+                    "Safe Native (Zero Artifacts, Recommended)",
+                    "Step-1 Dynamic Cache (Experimental Acceleration)"
+                ], {
+                    "default": "Safe Native (Zero Artifacts, Recommended)",
+                    "tooltip": "模式选择: Safe Native 采用 100% 原生 ComfyUI Attention 运算，配合网格对齐关键帧注入，从数学层面根除闪烁与色偏；Step-1 Dynamic Cache 采用在线动态 KV 缓存以获得加速。"
+                }),
                 "cache_dtype": (["fp8", "bf16", "fp16"], {"default": "fp8"}),
                 "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
-                "use_anchor": ("BOOLEAN", {"default": True}),
-                "anchor_frames": ("INT", {"default": 5, "min": 1, "max": 31, "step": 1, "tooltip": "首尾锚点保护实际视频帧数 (Anchor Window, 推荐 5 帧，约 1~2 个 latent steps)"}),
-                "rolling_frames": ("INT", {"default": 24, "min": 4, "max": 124, "step": 1, "tooltip": "滑动窗口实际视频帧数 (Rolling Window, 推荐 16~32 帧，最大可至单片段全长 124 帧)"}),
+                "rolling_frames": (["22", "5", "39", "56", "73", "90", "107", "124"], {
+                    "default": "22",
+                    "tooltip": "滑动窗口实际视频帧数 (VAE 网格点)。推荐 22 帧 (~0.92s, 7 个 latent steps，严密对齐 cycle position 0)"
+                }),
             },
             "optional": {
+                "use_anchor": ("BOOLEAN", {"default": False, "tooltip": "是否额外保留第一段的首帧锚点。多片段连续接力建议 False，由 rolling head 平滑过渡"}),
+                "anchor_frames": ("INT", {"default": 5, "min": 1, "max": 31, "step": 1, "tooltip": "首尾锚点保护实际视频帧数"}),
                 "anchor_latent_frames": ("INT", {"default": 2, "min": 1, "max": 16, "step": 1}),
-                "rolling_latent_frames": ("INT", {"default": 6, "min": 1, "max": 64, "step": 1}),
+                "rolling_latent_frames": ("INT", {"default": 7, "min": 1, "max": 64, "step": 1}),
             }
         }
 
@@ -76,32 +86,51 @@ class MiniMaxPrefixCacheConfigNode:
 
     def create_config(
         self,
-        cache_dtype: str,
-        device_mode: str,
-        use_anchor: bool,
+        cache_mode: str = "Safe Native (Zero Artifacts, Recommended)",
+        cache_dtype: str = "fp8",
+        device_mode: str = "auto",
+        rolling_frames: Any = "22",
+        use_anchor: bool = False,
         anchor_frames: int = 5,
-        rolling_frames: int = 24,
         anchor_latent_frames: Optional[int] = None,
         rolling_latent_frames: Optional[int] = None,
         **kwargs
     ) -> Tuple[KVCacheConfig]:
-        # Backward compatibility for workflows passing old *_latent_frames
+        # Seamless backward compatibility for older saved workflow widget ordering:
+        # e.g. ['fp8', 'auto', True, ...] where cache_dtype was first
+        if cache_mode in ("fp8", "bf16", "fp16") and cache_dtype in ("auto", "gpu", "cpu_pinned"):
+            actual_cache_dtype = cache_mode
+            actual_device_mode = cache_dtype
+            actual_use_anchor = bool(rolling_frames) if isinstance(rolling_frames, bool) else use_anchor
+            actual_cache_mode = "Safe Native (Zero Artifacts, Recommended)"
+            r_frames = 22
+        else:
+            actual_cache_mode = cache_mode
+            actual_cache_dtype = cache_dtype
+            actual_device_mode = device_mode
+            actual_use_anchor = use_anchor
+            try:
+                r_frames = int(rolling_frames)
+            except (ValueError, TypeError):
+                r_frames = 22
+
+        if rolling_latent_frames is not None:
+            r_frames = latent_steps_to_pixel_frames(rolling_latent_frames)
+        elif "rolling_latent_frames" in kwargs:
+            r_frames = latent_steps_to_pixel_frames(kwargs["rolling_latent_frames"])
+
         if anchor_latent_frames is not None:
             anchor_frames = latent_steps_to_pixel_frames(anchor_latent_frames)
         elif "anchor_latent_frames" in kwargs:
             anchor_frames = latent_steps_to_pixel_frames(kwargs["anchor_latent_frames"])
 
-        if rolling_latent_frames is not None:
-            rolling_frames = latent_steps_to_pixel_frames(rolling_latent_frames)
-        elif "rolling_latent_frames" in kwargs:
-            rolling_frames = latent_steps_to_pixel_frames(kwargs["rolling_latent_frames"])
-
         config = KVCacheConfig(
-            cache_dtype=cache_dtype,
-            device_mode=device_mode,
-            use_anchor=use_anchor,
+            cache_mode=actual_cache_mode,
+            cache_dtype=actual_cache_dtype,
+            device_mode=actual_device_mode,
+            use_anchor=actual_use_anchor,
             anchor_frames=anchor_frames,
-            rolling_frames=rolling_frames
+            rolling_frames=r_frames
         )
         return (config,)
 
@@ -195,6 +224,8 @@ class MiniMaxPrefixCacheApplierNode:
     ) -> Tuple[Any, Any, LongVideoSession]:
         cfg = cache_config or KVCacheConfig()
         sess = session or LongVideoSession(cfg)
+        if session is not None and cache_config is not None:
+            sess.config = cfg
 
         ctx_target = context_latent if context_latent is not None else context_video_latent
         anc_target = anchor_latent if anchor_latent is not None else anchor_video_latent
