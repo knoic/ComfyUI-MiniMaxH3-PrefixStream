@@ -63,6 +63,15 @@ Restart ComfyUI. The nodes will appear under the category `MiniMaxH3/PrefixStrea
 
 ---
 
+## Example Workflow & Documentation
+
+- 📄 **Ready-to-Use Workflow**: [`examples/MiniMaxH3_PrefixStream_LongVideo_Workflow.json`](examples/MiniMaxH3_PrefixStream_LongVideo_Workflow.json)
+  - Drag and drop this JSON directly into your ComfyUI canvas to run PrefixStream long video generation.
+- 📖 **Detailed Chinese User Guide (中文详细使用指南)**: [`docs/USER_GUIDE_CN.md`](docs/USER_GUIDE_CN.md)
+  - Includes hardware recommendations, parameter tuning, multi-clip infinite continuation walkthroughs, and FAQ.
+
+---
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

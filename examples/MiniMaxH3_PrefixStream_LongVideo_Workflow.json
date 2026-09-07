@@ -1,0 +1,724 @@
+{
+  "last_node_id": 25,
+  "last_link_id": 35,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        -1200,
+        -300
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "minimax_h3_fl2va_bf16.safetensors"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "CLIPLoader",
+      "pos": [
+        -1200,
+        -150
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen_3_vl_7b_bf16.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [
+        -1200,
+        0
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_video_vae.safetensors"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "pos": [
+        -1200,
+        150
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_audio_vae.safetensors"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "CLIPTextEncode",
+      "pos": [
+        -850,
+        -150
+      ],
+      "size": [
+        350,
+        150
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "cinematic movie, a cyber samurai walking through a futuristic neon city in the rain, ultra detailed, 8k"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "MiniMaxPrefixCacheConfig",
+      "pos": [
+        -850,
+        100
+      ],
+      "size": [
+        350,
+        180
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "cache_config",
+          "type": "MINIMAX_CACHE_CONFIG",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxPrefixCacheConfig"
+      },
+      "widgets_values": [
+        "fp8",
+        "auto",
+        true,
+        2,
+        6
+      ]
+    },
+    {
+      "id": 7,
+      "type": "MiniMaxH3SigmaShift",
+      "pos": [
+        -850,
+        -300
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3SigmaShift"
+      },
+      "widgets_values": [
+        12.0,
+        3.0
+      ]
+    },
+    {
+      "id": 8,
+      "type": "MiniMaxPrefixCacheApplier",
+      "pos": [
+        -450,
+        -300
+      ],
+      "size": [
+        350,
+        220
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 7
+        },
+        {
+          "name": "cache_config",
+          "type": "MINIMAX_CACHE_CONFIG",
+          "link": 6
+        },
+        {
+          "name": "context_video_latent",
+          "type": "LATENT",
+          "link": null
+        },
+        {
+          "name": "anchor_video_latent",
+          "type": "LATENT",
+          "link": null
+        },
+        {
+          "name": "context_audio",
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "session",
+          "type": "MINIMAX_SESSION",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "session",
+          "type": "MINIMAX_SESSION",
+          "links": [
+            9
+          ],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxPrefixCacheApplier"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 9,
+      "type": "MiniMaxCacheMonitor",
+      "pos": [
+        -450,
+        0
+      ],
+      "size": [
+        350,
+        150
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "session",
+          "type": "MINIMAX_SESSION",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "telemetry_report",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxCacheMonitor"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 10,
+      "type": "KSampler",
+      "pos": [
+        -50,
+        -300
+      ],
+      "size": [
+        350,
+        450
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 8
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 5
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": null
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            11
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        123456789,
+        "randomize",
+        25,
+        6.0,
+        "euler",
+        "normal",
+        1.0
+      ]
+    },
+    {
+      "id": 11,
+      "type": "EmptyLatentVideo",
+      "pos": [
+        -450,
+        200
+      ],
+      "size": [
+        350,
+        150
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            10
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptyLatentVideo"
+      },
+      "widgets_values": [
+        1280,
+        720,
+        37,
+        1
+      ]
+    },
+    {
+      "id": 12,
+      "type": "MiniMaxLongVideoStitcher",
+      "pos": [
+        350,
+        -300
+      ],
+      "size": [
+        350,
+        250
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "current_video",
+          "type": "LATENT",
+          "link": 11
+        },
+        {
+          "name": "previous_video",
+          "type": "LATENT",
+          "link": null
+        },
+        {
+          "name": "current_audio",
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "previous_audio",
+          "type": "AUDIO",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "stitched_video",
+          "type": "LATENT",
+          "links": [
+            12
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "stitched_audio",
+          "type": "AUDIO",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxLongVideoStitcher"
+      },
+      "widgets_values": [
+        2,
+        50
+      ]
+    },
+    {
+      "id": 13,
+      "type": "VAEDecode",
+      "pos": [
+        750,
+        -300
+      ],
+      "size": [
+        250,
+        150
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 12
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            13
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "SaveAnimatedPNG",
+      "pos": [
+        1050,
+        -300
+      ],
+      "size": [
+        350,
+        450
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 13
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveAnimatedPNG"
+      },
+      "widgets_values": [
+        "MiniMax_PrefixStream_Video",
+        24,
+        true
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      7,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      5,
+      0,
+      "CLIP"
+    ],
+    [
+      3,
+      3,
+      0,
+      13,
+      1,
+      "VAE"
+    ],
+    [
+      5,
+      5,
+      0,
+      10,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      6,
+      6,
+      0,
+      8,
+      1,
+      "MINIMAX_CACHE_CONFIG"
+    ],
+    [
+      7,
+      7,
+      0,
+      8,
+      0,
+      "MODEL"
+    ],
+    [
+      8,
+      8,
+      0,
+      10,
+      0,
+      "MODEL"
+    ],
+    [
+      9,
+      8,
+      1,
+      9,
+      0,
+      "MINIMAX_SESSION"
+    ],
+    [
+      10,
+      11,
+      0,
+      10,
+      3,
+      "LATENT"
+    ],
+    [
+      11,
+      10,
+      0,
+      12,
+      0,
+      "LATENT"
+    ],
+    [
+      12,
+      12,
+      0,
+      13,
+      0,
+      "LATENT"
+    ],
+    [
+      13,
+      13,
+      0,
+      14,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "title": "1. 模型与编码器加载 (Model & Encoder Loaders)",
+      "bounding": [
+        -1250,
+        -380,
+        360,
+        680
+      ],
+      "color": "#3f789e",
+      "font_size": 24
+    },
+    {
+      "title": "2. MiniMax H3 PrefixStream 缓存引擎配置 (KV Cache Setup)",
+      "bounding": [
+        -880,
+        -380,
+        400,
+        750
+      ],
+      "color": "#2a8253",
+      "font_size": 24
+    },
+    {
+      "title": "3. 注入 Hook 与极速采样 (Hooked Diffusion Sampling: 45% Faster)",
+      "bounding": [
+        -480,
+        -380,
+        790,
+        750
+      ],
+      "color": "#8c532a",
+      "font_size": 24
+    },
+    {
+      "title": "4. 缝合与后处理渲染 (Seamless Stitching & VAE Decode)",
+      "bounding": [
+        320,
+        -380,
+        1100,
+        750
+      ],
+      "color": "#6e3f9e",
+      "font_size": 24
+    }
+  ],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
