@@ -136,10 +136,23 @@ def _make_block_patch(
                 q, k, v = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
                 q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
 
+                # Determine media tokens vs text tokens
+                text_len = 0
+                layout = args.get("layout") or transformer_options.get("layout") or transformer_options.get("minimax_h3_layout")
+                if layout is not None and hasattr(layout, "segments"):
+                    for seg in layout.segments:
+                        if len(seg) >= 3 and seg[2] == "text":
+                            text_len = seg[1]
+                            break
+
+                # If text exists in warmup sequence, only cache the media portion (audio + video)
+                k_cache = k[:, :, text_len:, :].contiguous() if text_len > 0 else k.contiguous()
+                v_cache = v[:, :, text_len:, :].contiguous() if text_len > 0 else v.contiguous()
+
                 if is_anchor_warmup:
-                    cache_manager.set_anchor_kv(layer_idx, k, v)
+                    cache_manager.set_anchor_kv(layer_idx, k_cache, v_cache)
                 elif is_rolling_warmup:
-                    cache_manager.set_rolling_kv(layer_idx, k, v)
+                    cache_manager.set_rolling_kv(layer_idx, k_cache, v_cache)
 
                 out = asymmetric_cached_attention(
                     q, k, v,
@@ -280,6 +293,16 @@ def _make_block_patch(
         if mode == "decoupled_pure":
             if layer_idx == 0:
                 cache_manager.step_counter += 1
+                if cache_manager.step_counter == 1:
+                    try:
+                        k_chk, _ = cache_manager.get_combined_kv(0, target_device=torch.device("cpu"), compute_dtype=torch.float32)
+                        tokens = k_chk.shape[2] if k_chk is not None else 0
+                    except Exception:
+                        tokens = 0
+                    logger.info(
+                        "[Decoupled Pure Prefix] Step 1: Active! Injecting %d historical prefix tokens into 50-layer DiT cross-attention (0 timeline overlap).",
+                        tokens
+                    )
 
             # If no cached prefix KV exists (e.g. clip 1 with no predecessor), pass through natively
             if not cache_manager.has_cache(layer_idx):

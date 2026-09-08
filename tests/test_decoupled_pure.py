@@ -158,5 +158,123 @@ class TestDecoupledTrimBypass(unittest.TestCase):
         self.assertEqual(out_images.shape[0], 124)
 
 
+class TestDecoupledWarmupAndHookEndToEnd(unittest.TestCase):
+    """End-to-end integration test for Phase 0 warmup and Phase 1 decoupled hook execution."""
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch required for integration tests")
+    def test_warmup_and_hook_execution(self):
+        import torch.nn as nn
+        from engine.cache_manager import PrefixKVCacheManager, KVCacheConfig
+        from engine.warmup_executor import WarmupExecutor
+        from engine.block_hook import create_prefix_dit_hook
+
+        heads = 4
+        head_dim = 32
+        hidden = heads * head_dim
+        num_layers = 4  # fast test
+
+        # 1. Build a mock DiT model
+        class MockAttention(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.heads = heads
+                self.head_dim = head_dim
+                self.qkv_proj = nn.Linear(hidden, hidden * 3, bias=False)
+                self.q_norm = nn.LayerNorm(head_dim)
+                self.k_norm = nn.LayerNorm(head_dim)
+                self.out_proj = nn.Linear(hidden, hidden, bias=False)
+
+            def forward(self, x, rope_freqs=None, transformer_options=None):
+                q, k, v = self.qkv_proj(x).split(self.heads * self.head_dim, dim=-1)
+                return self.out_proj(q)
+
+        class MockBlock(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attn = MockAttention()
+
+            def forward(self, x, t_emb=None, mod_segments=None, rope_freqs=None, transformer_options=None, attention=None):
+                attn_fn = self.attn if attention is None else attention
+                return x + attn_fn(x, rope_freqs=rope_freqs, transformer_options=transformer_options)
+
+        class MockDiffusionModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.blocks = nn.ModuleList([MockBlock() for _ in range(num_layers)])
+                self.patch_size = (1, 2, 2)
+                self.video_patch_proj = nn.Linear(16 * 1 * 2 * 2, hidden)
+                self.audio_patch_proj = nn.Linear(32, hidden)
+                self.text_dim = 5120
+
+            def forward(self, x, timestep, context, transformer_options=None):
+                # Simple forward pass that triggers patches_replace hooks
+                patches_replace = (transformer_options or {}).get("patches_replace", {})
+                dit_patches = patches_replace.get("dit", {})
+
+                # Dummy sequence
+                h = torch.randn(30, hidden)
+                for i, block in enumerate(self.blocks):
+                    if ("double_block", i) in dit_patches:
+                        def block_wrap(args):
+                            return {"img": block(args["img"], transformer_options=args.get("transformer_options"), attention=args.get("attention"))}
+                        h = dit_patches[("double_block", i)](
+                            {"img": h, "transformer_options": transformer_options},
+                            {"original_block": block_wrap}
+                        )["img"]
+                    else:
+                        h = block(h)
+                return [x[0], x[1]]
+
+        mock_diff = MockDiffusionModel()
+        mock_patcher = type("MockPatcher", (), {"model": type("M", (), {"diffusion_model": mock_diff})()})()
+
+        # 2. Phase 0: Run WarmupExecutor
+        cfg = KVCacheConfig(cache_mode="Decoupled Pure Prefix (Zero Overlap, Prompt-Aligned)", num_layers=num_layers, num_heads=heads, head_dim=head_dim)
+        cache_mgr = PrefixKVCacheManager(cfg)
+        warmup_exec = WarmupExecutor(cache_mgr)
+
+        v_prefix = torch.randn(1, 16, 7, 16, 16)
+        a_prefix = torch.randn(1, 32, 2, 11)
+        text_ctx = torch.randn(1, 5, 5120)
+
+        success = warmup_exec.precompute_rolling(
+            model_patcher=mock_patcher,
+            prefix_video_latent=v_prefix,
+            prefix_audio_latent=a_prefix,
+            text_context=text_ctx
+        )
+        self.assertTrue(success)
+        self.assertTrue(cache_mgr.has_cache(0))
+        self.assertTrue(cache_mgr.has_cache(num_layers - 1))
+
+        # 3. Phase 1: Run Decoupled Pure hook on target generation step
+        decoupled_hooks = create_prefix_dit_hook(cache_mgr, model=mock_diff)
+        target_s = 64
+        h_target = torch.randn(target_s, hidden)
+
+        hook_fn = decoupled_hooks[("double_block", 0)]
+        block_wrap_called = False
+
+        def mock_wrap(args):
+            nonlocal block_wrap_called
+            block_wrap_called = True
+            # Simulate block calling the attention function passed in args
+            attn_fn = args.get("attention")
+            self.assertIsNotNone(attn_fn)
+            out_attn = attn_fn(args["img"])
+            self.assertEqual(out_attn.shape, args["img"].shape)
+            return {"img": args["img"] + out_attn}
+
+        res = hook_fn(
+            {"img": h_target, "transformer_options": {"minimax_prefix_mode": "decoupled_pure"}},
+            {"original_block": mock_wrap}
+        )
+
+        self.assertTrue(block_wrap_called)
+        self.assertEqual(res["img"].shape, (target_s, hidden))
+        self.assertEqual(cache_mgr.step_counter, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
+

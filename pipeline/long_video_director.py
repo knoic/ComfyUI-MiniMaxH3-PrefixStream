@@ -202,12 +202,24 @@ class LongVideoSession:
         # Branch A: Decoupled Pure Prefix Mode (Zero Timeline Overlap, Prompt-Aligned)
         if self.config.is_decoupled_mode():
             if tail_video is not None and not self.cache_manager.has_cache(0):
+                # Auto-extract text embedding tensor from conditioning if text_context is None
+                extracted_ctx = text_context
+                if extracted_ctx is None and conditioning and len(conditioning) > 0:
+                    try:
+                        first_item = conditioning[0]
+                        if isinstance(first_item, (list, tuple)) and len(first_item) > 0:
+                            cand = first_item[0]
+                            if isinstance(cand, torch.Tensor):
+                                extracted_ctx = cand
+                    except Exception:
+                        pass
+
                 logger.info("[Decoupled Pure Prefix] Extracting pure prefix KV from previous clip tail...")
                 self.warmup_executor.precompute_rolling(
                     model_patcher=model_patcher,
                     prefix_video_latent=tail_video,
                     prefix_audio_latent=tail_audio,
-                    text_context=text_context
+                    text_context=extracted_ctx
                 )
 
             # In decoupled mode, NEVER inject keyframes into timeline conditioning!
