@@ -4,72 +4,72 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-green.svg)]()
 [![Model](https://img.shields.io/badge/model-MiniMax--H3-orange.svg)]()
 
-A native masked audiovisual continuation and streaming long-video suite for MiniMax H3 in ComfyUI.
+一个用于 ComfyUI MiniMax H3 的原生音视频续写与长视频流式生成节点套件。
 
-The default **Native Masked AV** path follows [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite): it copies the previous AV latent into the new target head and protects video and audio independently with ComfyUI's native denoise masks. `Safe Native` remains available as the keyframe-based fallback.
-
----
-
-## Key Highlights
-
-- 🛡️ **Native Masked AV by Default**: Copies clean previous video/audio latents directly into the next target and protects them in-place; no DiT monkey-patching or experimental KV injection.
-- 🎯 **Exact Joint AV Boundaries**: Uses the MiniMax H3-compatible `39 / 90 / 141 / 192 / ...` frame grid. The default 39-frame context is about 1.625 seconds and maps exactly to 65 audio-latent ticks.
-- 🎵 **Independent Audio Protection**: Video and audio receive separate native masks. Dialogue can keep the full previous audio tail, while an optional audio-only feather releases the final protected ticks gradually.
-- 🔒 **Collision-Safe Conditioning**: Keyframes inside the protected video head are removed so a frame-0 guide cannot fight the copied latent context. Future endpoint and reference conditioning remain available.
-- 🧩 **Safe Native Fallback**: The earlier native-attention/keyframe continuation path remains selectable for compatibility with workflows that cannot use masked latents.
-- ✂️ **Seam-Ready Outputs**: Session metadata drives exact duplicate-head trimming, with pixel-space video trimming and synchronized audio handling for final assembly.
+默认的 **Native Masked AV** 路径参考了 [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)：它将上一段的音视频 latent 复制到新目标的开头，并通过 ComfyUI 原生去噪遮罩独立保护视频与音频。`Safe Native` 保留为基于关键帧的兼容性备选方案。
 
 ---
 
-## At a Glance
+## 核心特性
 
-### Choose the continuation path in one node
-
-`MiniMax H3 Continuation Config` keeps the main choice deliberately small: use **Native Masked AV (Recommended)** for normal continuation, and switch to **Safe Native** only when a workflow needs the compatibility fallback. `continuation_frames` selects the protected overlap length on the H3 frame grid.
-
-![MiniMax H3 Continuation Config](assets/readme/continuation-config.png)
-
-### Browse and resume from the Clip Bin
-
-`MiniMax H3 Clip Bin Picker` presents saved clips as a visual gallery. Pick a prior shot, filter by rating, and use its latent and tail frame as the next continuation context—without hunting through output folders.
-
-![MiniMax H3 Clip Bin Picker gallery](assets/readme/clip-bin-picker-gallery.png)
+- 🛡️ **默认使用 Native Masked AV**：将干净的上一段视频/音频 latent 直接复制到下一段的开头并原地保护；无需修改 DiT，也不使用实验性的 KV 注入。
+- 🎯 **精确的联合音视频边界**：使用 MiniMax H3 兼容的 `39 / 90 / 141 / 192 / ...` 帧网格。默认 39 帧上下文约为 1.625 秒，恰好对应 65 个音频 latent tick。
+- 🎵 **独立的音频保护**：视频和音频分别使用原生遮罩。对白可完整保留上一段音频尾部，并可选用仅影响音频的羽化，使最后的保护 tick 平滑释放。
+- 🔒 **避免条件冲突**：移除受保护视频开头内的关键帧，防止第 0 帧引导与复制的 latent 上下文相互冲突；之后的端点和参考条件仍可正常使用。
+- 🧩 **Safe Native 兼容备选**：对于不能使用 masked latent 的工作流，仍可选择早期的原生注意力/关键帧续写路径。
+- ✂️ **便于无缝拼接的输出**：会话元数据驱动精确的重复开头裁切，支持像素空间视频裁切和同步音频处理，便于最终合成。
 
 ---
 
-## Architecture Overview
+## 快速浏览
+
+### 一个节点选择续写方案
+
+`MiniMax H3 Continuation Config` 只保留必要的核心选择：普通续写使用 **Native Masked AV (Recommended)**；只有工作流需要兼容方案时才切换为 **Safe Native**。`continuation_frames` 用于选择 H3 帧网格上的受保护重叠长度。
+
+![MiniMax H3 续写配置节点](assets/readme/continuation-config.png)
+
+### 从素材箱浏览并继续镜头
+
+`MiniMax H3 Clip Bin Picker` 将已保存的片段以可视化画廊呈现。选择上一镜头、按评分筛选，并将其 latent 与尾帧作为下一段的续写上下文，无需在输出目录中翻找文件。
+
+![MiniMax H3 素材箱画廊选择器](assets/readme/clip-bin-picker-gallery.png)
+
+---
+
+## 工作原理
 
 ```text
-Previous full AV latent ──► select canonical 39/90/141/... frame tail
+上一段完整音视频 latent ──► 选择规范的 39/90/141/... 帧尾部
                                       │
-Target empty AV latent ───────────────┼──► copy tail into target head
-                                      └──► noise_mask=(video mask, audio mask)
+目标空音视频 latent ───────────────────┼──► 将尾部复制到目标开头
+                                      └──► noise_mask =（视频遮罩，音频遮罩）
                                                         │
                                                         ▼
-                                      Native ComfyUI MiniMax H3 sampling
+                                      ComfyUI 原生 MiniMax H3 采样
 ```
 
 ---
 
-## Custom Nodes
+## 自定义节点
 
-| Node Name | Category | Description |
+| 节点名称 | 分类 | 说明 |
 | :--- | :--- | :--- |
-| **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | Selects `Native Masked AV` (default) or `Safe Native` (fallback), plus a user-visible video context length. |
-| **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | Builds the native video/audio masks and outputs `masked_latent`, or applies collision-safe keyframe conditioning in fallback mode. |
-| **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, guaranteeing zero VAE causal flicker and perfect sync. |
-| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly joins video in pixel space (with luminance gain matching) and audio waveforms (equal-power crossfade). |
-| **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to save joint AV latents to safetensors without external dependencies. |
-| **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to load joint AV latents with metadata for multi-clip continuous streaming. |
-| **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | Archives a generated clip with a preview, rating, shot tag, prompt, and continuation lineage. |
-| **`MiniMax H3 Clip Bin Picker`** | `MiniMaxH3/PrefixStream` | Gallery-based loader for finding a saved clip and exposing its latent, tail frame, prompt, and ID. |
-| **`MiniMax Cache Telemetry Monitor`**| `MiniMaxH3/PrefixStream` | Reports the active continuation mode, protected context geometry, and session progress. |
+| **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | 选择默认的 `Native Masked AV` 或备选的 `Safe Native`，并设置用户可见的视频上下文长度。 |
+| **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | 构建原生视频/音频遮罩并输出 `masked_latent`；在备选模式下应用避免冲突的关键帧条件。 |
+| **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | 在像素和音频波形空间裁切开头的重叠帧，避免 VAE 因果闪烁并保持同步。 |
+| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | 在像素空间无缝合并视频（含亮度增益匹配）和音频波形（等功率交叉淡化）。 |
+| **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | 独立地将联合音视频 latent 保存为 safetensors，无外部依赖。 |
+| **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | 独立加载带有元数据的联合音视频 latent，用于多片段连续流式生成。 |
+| **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | 连同预览图、评分、镜头标签、提示词和续写血缘归档生成片段。 |
+| **`MiniMax H3 Clip Bin Picker`** | `MiniMaxH3/PrefixStream` | 以画廊方式查找已保存的片段，并输出其 latent、尾帧、提示词和 ID。 |
+| **`MiniMax Cache Telemetry Monitor`**| `MiniMaxH3/PrefixStream` | 显示当前续写模式、受保护上下文几何信息和会话进度。 |
 
 ---
 
-## Installation
+## 安装
 
-Clone this repository into your ComfyUI `custom_nodes` directory:
+将仓库克隆到 ComfyUI 的 `custom_nodes` 目录：
 
 ```bash
 cd ComfyUI/custom_nodes
@@ -78,13 +78,13 @@ cd ComfyUI-MiniMaxH3-PrefixStream
 pip install -r requirements.txt
 ```
 
-Restart ComfyUI. The nodes will appear under the category `MiniMaxH3/PrefixStream`.
+重启 ComfyUI 后，节点会出现在 `MiniMaxH3/PrefixStream` 分类下。
 
 ---
 
-## Running Unit Tests
+## 运行单元测试
 
-Verify everything locally:
+可通过以下命令进行本地验证：
 
 ```bash
 python tests/test_cache_manager.py
@@ -95,29 +95,27 @@ python tests/test_native_masked_av.py
 
 ---
 
-## Example Workflow & Documentation
+## 示例工作流与文档
 
-- 📄 **Ready-to-Use Workflow**: [`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
-  - Drag and drop this complete 42-node JSON directly into your ComfyUI canvas to run PrefixStream long video generation.
-- 📖 **Detailed Chinese User Guide (中文详细使用指南)**: [`docs/USER_GUIDE_CN.md`](docs/USER_GUIDE_CN.md)
-  - Includes hardware recommendations, parameter tuning, multi-clip infinite continuation walkthroughs, and FAQ.
+- 📄 **可直接使用的工作流**：[`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
+  - 将这份完整的 42 节点 JSON 直接拖入 ComfyUI 画布，即可运行 PrefixStream 长视频生成。
+- 📖 **中文详细使用指南**：[`docs/USER_GUIDE_CN.md`](docs/USER_GUIDE_CN.md)
+  - 包含硬件建议、参数调节、多片段无限续写流程与常见问题。
 
 ---
 
-## Acknowledgments & References (致谢与参考项目)
+## 致谢与参考项目
 
 本项目的诞生与时空续写设计深受以下开源项目与作者的启发，特此致以诚挚的感谢与敬意：
 
 1. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
    - 感谢 NikoDemon80 在 MiniMax H3 关键帧锚定算法、VAE 时空周期相位网格对齐公式（Snap to Run Grid）、音视频头部裁切及 5/3 音视频时间缩放比例方面的先驱性数学探索与启发。
-   - *Pioneering formulations for MiniMax H3 keyframe anchoring, VAE phase grid alignment, and audio-video temporal ratios.*
 
 2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@HerrgottMargott](https://github.com/HerrgottMargott)**
    - 感谢 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
-   - *Native per-stream masked AV continuation, exact joint AV context geometry, and independent audio protection.*
 
 ---
 
-## License
+## 许可证
 
-This project is licensed under the [MIT License](LICENSE).
+本项目采用 [MIT 许可证](LICENSE) 发布。
