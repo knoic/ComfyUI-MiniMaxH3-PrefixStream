@@ -1,9 +1,4 @@
-"""ComfyUI-MiniMaxH3-PrefixStream
-
-A high-performance Prefix KV Caching & Streaming Chaining Suite for MiniMax H3.
-Slashes DiT computation and prevents long-video degradation via Dual-Tier
-(Anchor + Rolling) Attention Caching and Seamless AV Handover.
-"""
+"""ComfyUI MiniMax H3 native masked AV continuation and streaming suite."""
 
 try:
     from .nodes import (

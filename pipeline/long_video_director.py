@@ -19,8 +19,6 @@ try:
         VIDEO_RUN_GRID,
     )
     from ..engine.rope_aligner import TemporalCursorTracker
-    from ..engine.warmup_executor import WarmupExecutor
-    from ..engine.block_hook import create_prefix_dit_hook
     from .seam_protector import audio_equal_power_crossfade, latent_soft_blend, trim_prefix_frames
 except (ImportError, ValueError):
     from engine.cache_manager import (
@@ -33,8 +31,6 @@ except (ImportError, ValueError):
         VIDEO_RUN_GRID,
     )
     from engine.rope_aligner import TemporalCursorTracker
-    from engine.warmup_executor import WarmupExecutor
-    from engine.block_hook import create_prefix_dit_hook
     from pipeline.seam_protector import audio_equal_power_crossfade, latent_soft_blend, trim_prefix_frames
 
 logger = logging.getLogger("minimax_prefix_stream")
@@ -141,7 +137,6 @@ class LongVideoSession:
         self.config = config or KVCacheConfig()
         self.cache_manager = PrefixKVCacheManager(self.config)
         self.cursor_tracker = TemporalCursorTracker()
-        self.warmup_executor = WarmupExecutor(self.cache_manager)
 
         self.current_clip_index: int = 0
         self.last_rolling_steps: int = 0
@@ -199,39 +194,7 @@ class LongVideoSession:
                 self.last_rolling_frames, rolling_steps, start, start % 5
             )
 
-        # Branch A: Decoupled Pure Prefix Mode (Zero Timeline Overlap, Prompt-Aligned)
-        if self.config.is_decoupled_mode():
-            if tail_video is not None and not self.cache_manager.has_cache(0):
-                # Auto-extract text embedding tensor from conditioning if text_context is None
-                extracted_ctx = text_context
-                if extracted_ctx is None and conditioning and len(conditioning) > 0:
-                    try:
-                        first_item = conditioning[0]
-                        if isinstance(first_item, (list, tuple)) and len(first_item) > 0:
-                            cand = first_item[0]
-                            if isinstance(cand, torch.Tensor):
-                                extracted_ctx = cand
-                    except Exception:
-                        pass
-
-                logger.info("[Decoupled Pure Prefix] Extracting pure prefix KV from previous clip tail...")
-                self.warmup_executor.precompute_rolling(
-                    model_patcher=model_patcher,
-                    prefix_video_latent=tail_video,
-                    prefix_audio_latent=tail_audio,
-                    text_context=extracted_ctx
-                )
-
-            # In decoupled mode, NEVER inject keyframes into timeline conditioning!
-            # The target timeline starts purely at t=0, fully aligned with user prompt.
-            updated_conditioning = conditioning
-            logger.info("[Decoupled Pure Prefix] Zero-overlap mode: timeline kept clean at t=0 (no minimax_keyframes injected).")
-
-            patched_model = self._attach_decoupled_hooks(model_patcher)
-            return patched_model, updated_conditioning
-
-        # Branch B: Standard In-Timeline Overlap (Safe Native / Step-1 Dynamic Cache)
-        # Inject keyframes into conditioning payload with conflict resolution
+        # Safe Native fallback uses in-timeline native keyframe conditioning.
         updated_conditioning = inject_minimax_keyframes(
             conditioning=conditioning,
             video_tail=tail_video,
@@ -239,76 +202,8 @@ class LongVideoSession:
             anchor_video=anchor_video_latent if self.config.use_anchor else None
         )
 
-        # Select mode: Safe Native (Recommended) vs Step-1 Dynamic Cache (Experimental)
-        if self.config.is_cache_enabled():
-            logger.info("Applying Step-1 Dynamic KV Caching Hook to DiT blocks.")
-            patched_model = self._attach_denoise_hooks(model_patcher)
-        else:
-            logger.info("Operating in Safe Native Mode: 100% native ComfyUI attention with zero DiT patching (guaranteed zero flicker).")
-            patched_model = model_patcher
-
-        return patched_model, updated_conditioning
-
-    def _attach_decoupled_hooks(self, model_patcher: Any) -> Any:
-        """Injects Decoupled Pure Prefix Hook into model patcher's transformer_options."""
-        if hasattr(model_patcher, "clone"):
-            patched = model_patcher.clone()
-        else:
-            patched = model_patcher
-
-        opts = getattr(patched, "model_options", {}).copy()
-        transformer_options = opts.get("transformer_options", {}).copy()
-        transformer_options["minimax_prefix_mode"] = "decoupled_pure"
-
-        patches_replace = transformer_options.get("patches_replace", {}).copy()
-        dit_patches = patches_replace.get("dit", {}).copy()
-
-        new_hooks = create_prefix_dit_hook(
-            cache_manager=self.cache_manager,
-            model=getattr(patched, "model", patched),
-            is_anchor_warmup=False,
-            is_rolling_warmup=False
-        )
-        dit_patches.update(new_hooks)
-        patches_replace["dit"] = dit_patches
-        transformer_options["patches_replace"] = patches_replace
-
-        opts["transformer_options"] = transformer_options
-        if hasattr(patched, "model_options"):
-            patched.model_options = opts
-
-        return patched
-
-    def _attach_denoise_hooks(self, model_patcher: Any) -> Any:
-        """Injects Phase 1 Denoising Hook into model patcher's transformer_options."""
-        if hasattr(model_patcher, "clone"):
-            patched = model_patcher.clone()
-        else:
-            patched = model_patcher
-
-        opts = getattr(patched, "model_options", {}).copy()
-        transformer_options = opts.get("transformer_options", {}).copy()
-        transformer_options["minimax_prefix_mode"] = "denoise"
-
-        patches_replace = transformer_options.get("patches_replace", {}).copy()
-        dit_patches = patches_replace.get("dit", {}).copy()
-
-        # Generate block hooks with model instance passed for direct module resolution
-        new_hooks = create_prefix_dit_hook(
-            cache_manager=self.cache_manager,
-            model=getattr(patched, "model", patched),
-            is_anchor_warmup=False,
-            is_rolling_warmup=False
-        )
-        dit_patches.update(new_hooks)
-        patches_replace["dit"] = dit_patches
-        transformer_options["patches_replace"] = patches_replace
-
-        opts["transformer_options"] = transformer_options
-        if hasattr(patched, "model_options"):
-            patched.model_options = opts
-
-        return patched
+        logger.info("Operating in Safe Native fallback mode with native ComfyUI attention and keyframes.")
+        return model_patcher, updated_conditioning
 
     def commit_generated_clip(
         self,
@@ -317,18 +212,6 @@ class LongVideoSession:
         trim_prefix: bool = True
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Registers a completed clip into session history and advances clip index."""
-        if self.config.is_decoupled_mode():
-            # In decoupled mode, generated clip is already 100% pure target without overlap frames
-            delivered_video = video_latent
-            delivered_audio = audio_latent
-            self.accumulated_video_latents.append(delivered_video)
-            if delivered_audio is not None:
-                self.accumulated_audio_latents.append(delivered_audio)
-            self.current_clip_index += 1
-            logger.info("Committed Decoupled Clip #%d (0 overlap frames). Total accumulated: %d",
-                        self.current_clip_index, len(self.accumulated_video_latents))
-            return delivered_video, delivered_audio
-
         rolling_steps = self.config.rolling_latent_frames if self.current_clip_index > 0 else 0
 
         delivered_video = trim_prefix_frames(video_latent, rolling_steps) if trim_prefix else video_latent

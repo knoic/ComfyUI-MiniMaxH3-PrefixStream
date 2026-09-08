@@ -1,8 +1,8 @@
-"""ComfyUI Custom Nodes for MiniMax H3 Prefix KV Caching & Streaming Chaining.
+"""ComfyUI custom nodes for MiniMax H3 masked AV continuation and chaining.
 
 Exposes:
 - MiniMaxPrefixCacheConfig: Configure FP8/BF16, GPU/CPU Pinned, Anchor & Rolling parameters in real video frames.
-- MiniMaxPrefixCacheApplier: Connects model, historical context latents, and hooks into KSampler.
+- MiniMaxPrefixCacheApplier: Builds native AV masks or Safe Native fallback conditioning.
 - MiniMaxTrimPrefixLatent: Automatically trims leading overlap frames from generated clips (AV unified).
 - MiniMaxLongVideoStitcher: Smoothly stitches video and audio latents between clips in unified LATENT space.
 - MiniMaxCacheMonitor: Real-time diagnostics for VRAM, memory footprint, and session progress.
@@ -35,6 +35,7 @@ try:
         latent_steps_to_pixel_frames,
     )
     from .pipeline.long_video_director import LongVideoSession
+    from .pipeline.native_masked_av import apply_native_masked_av
     from .pipeline.seam_protector import (
         audio_equal_power_crossfade,
         latent_soft_blend,
@@ -70,6 +71,7 @@ except (ImportError, ValueError):
         latent_steps_to_pixel_frames,
     )
     from pipeline.long_video_director import LongVideoSession
+    from pipeline.native_masked_av import apply_native_masked_av
     from pipeline.seam_protector import (
         audio_equal_power_crossfade,
         latent_soft_blend,
@@ -123,17 +125,16 @@ class MiniMaxPrefixCacheConfigNode:
                 "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
                 "use_anchor": ("BOOLEAN", {"default": False, "tooltip": "是否额外保留第一段的首帧锚点。多片段连续接力建议 False，由 rolling head 平滑过渡"}),
                 "anchor_frames": ("INT", {"default": 5, "min": 1, "max": 31, "step": 1, "tooltip": "首尾锚点保护实际视频帧数"}),
-                "rolling_frames": (["22", "5", "39", "56", "73", "90", "107", "124"], {
-                    "default": "22",
-                    "tooltip": "滑动窗口实际视频帧数 (VAE 网格点)。推荐 22 帧 (~0.92s, 7 个 latent steps，严密对齐 cycle position 0)"
+                "rolling_frames": (["39", "90", "141", "192"], {
+                    "default": "39",
+                    "tooltip": "Native Masked AV 保护的视频上下文帧数。推荐 39 帧；较长选项会自动下取整到 39/90/141/192... 的精确音视频公共边界。"
                 }),
                 "cache_mode": ([
-                    "Safe Native (Zero Artifacts, Recommended)",
-                    "Step-1 Dynamic Cache (Experimental Acceleration)",
-                    "Decoupled Pure Prefix (Zero Overlap, Prompt-Aligned)"
+                    "Native Masked AV (v1.4, Recommended)",
+                    "Safe Native (Fallback)"
                 ], {
-                    "default": "Safe Native (Zero Artifacts, Recommended)",
-                    "tooltip": "模式选择: Safe Native 采用 100% 原生 ComfyUI Attention 运算；Step-1 Dynamic Cache 采用在线动态 KV 缓存；Decoupled Pure Prefix (Zero Overlap) 彻底解耦时间轴，前缀作为纯外部只读 KV 注入，新视频从 t=0 起跑，提示词动作完美对齐第 0 秒，免裁切零损耗。"
+                    "default": "Native Masked AV (v1.4, Recommended)",
+                    "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 保留关键帧条件续写作为兼容备选。"
                 }),
             },
             "optional": {
@@ -153,15 +154,15 @@ class MiniMaxPrefixCacheConfigNode:
         device_mode: str = "auto",
         use_anchor: bool = False,
         anchor_frames: int = 5,
-        rolling_frames: Any = "22",
-        cache_mode: str = "Safe Native (Zero Artifacts, Recommended)",
+        rolling_frames: Any = "39",
+        cache_mode: str = "Native Masked AV (v1.4, Recommended)",
         anchor_latent_frames: Optional[int] = None,
         rolling_latent_frames: Optional[int] = None,
         **kwargs
     ) -> Tuple[KVCacheConfig]:
         # Seamless dual-order compatibility:
         # If cache_dtype was passed with a cache_mode string, adapt dynamically
-        if str(cache_dtype).startswith(("Safe Native", "Step-1", "Decoupled")):
+        if str(cache_dtype).startswith(("Native Masked AV", "Safe Native")):
             actual_cache_mode = cache_dtype
             actual_cache_dtype = device_mode
             actual_device_mode = str(use_anchor)
@@ -179,7 +180,7 @@ class MiniMaxPrefixCacheConfigNode:
         try:
             r_frames = int(actual_rolling)
         except (ValueError, TypeError):
-            r_frames = 22
+            r_frames = 39
 
         if rolling_latent_frames is not None:
             r_frames = latent_steps_to_pixel_frames(rolling_latent_frames)
@@ -252,8 +253,95 @@ def pack_av_latent(
     return out
 
 
+def _pack_nested_streams(video: torch.Tensor, audio: torch.Tensor):
+    """Pack two H3 streams without importing ComfyUI during standalone tests."""
+    try:
+        import comfy.nested_tensor
+        return comfy.nested_tensor.NestedTensor((video, audio))
+    except (ImportError, AttributeError):
+        return (video, audio)
+
+
+def _drop_head_keyframes(conditioning: Any, protected_frames: int):
+    """Remove native keyframes that collide with the hard-protected masked head."""
+    if not conditioning:
+        return conditioning
+    out = []
+    for item in conditioning:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            out.append(item)
+            continue
+        embedding, extra = item
+        updated = dict(extra)
+        prior = updated.get("minimax_keyframes") or []
+        updated["minimax_keyframes"] = [
+            dict(kf) for kf in prior
+            if float(kf.get("resolved_frame_index", 0)) >= float(protected_frames)
+        ]
+        out.append([embedding, updated])
+    return out
+
+
+def _require_native_masked_av_support() -> None:
+    """Probe for ComfyUI's native MiniMax H3 per-stream mask implementation."""
+    import inspect
+    try:
+        import comfy.model_base as model_base
+        import comfy.ldm.minimax.model as h3_model
+    except Exception as exc:
+        raise RuntimeError(
+            "Native Masked AV requires a current ComfyUI build with MiniMax H3 AV-mask support (PR #15375)."
+        ) from exc
+
+    base_cls = getattr(model_base, "MiniMaxH3", None)
+    model_cls = getattr(h3_model, "MiniMaxH3Model", None)
+    forward = getattr(model_cls, "forward", None) if model_cls is not None else None
+    inner = getattr(model_cls, "_forward", None) if model_cls is not None else None
+    scale = base_cls.__dict__.get("scale_latent_inpaint") if base_cls is not None else None
+    extra_conds = getattr(base_cls, "extra_conds", None) if base_cls is not None else None
+
+    def has_params(fn, *names):
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            return False
+        return all(name in params for name in names)
+
+    def code_names(fn):
+        import types
+        found = set()
+        def walk(code):
+            if not isinstance(code, types.CodeType):
+                return
+            found.update(code.co_names)
+            found.update(value for value in code.co_consts if isinstance(value, str))
+            for value in code.co_consts:
+                if isinstance(value, types.CodeType):
+                    walk(value)
+        walk(getattr(fn, "__code__", None))
+        return found
+
+    extra_names = code_names(extra_conds) if callable(extra_conds) else set()
+
+    available = all((
+        base_cls is not None,
+        callable(getattr(h3_model, "mask_row_values", None)),
+        callable(forward) and has_params(forward, "denoise_mask", "audio_denoise_mask"),
+        callable(inner) and has_params(inner, "denoise_mask", "audio_denoise_mask"),
+        callable(base_cls.__dict__.get("_token_grid_masks")) if base_cls is not None else False,
+        callable(base_cls.__dict__.get("_denoise_mask_conds")) if base_cls is not None else False,
+        callable(scale) and has_params(scale, "x", "denoise_mask"),
+        callable(extra_conds) and "denoise_mask" in extra_names and "_denoise_mask_conds" in extra_names,
+    ))
+    if not available:
+        raise RuntimeError(
+            "Native Masked AV requires a current ComfyUI build with MiniMax H3 AV-mask support from PR #15375. "
+            "Update ComfyUI, restart it completely, and reload the workflow."
+        )
+
+
 class MiniMaxPrefixCacheApplierNode:
-    """Attaches Prefix KV Caching engine to MiniMax H3 model and injects keyframe conditioning before diffusion sampling."""
+    """Builds Native Masked AV sampling input or Safe Native fallback conditioning."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -270,11 +358,14 @@ class MiniMaxPrefixCacheApplierNode:
                 "anchor_video_latent": ("LATENT",),   # Backward compatibility alias
                 "context_audio": ("AUDIO",),          # Optional raw audio waveform fallback
                 "session": ("MINIMAX_SESSION",),
+                "target_latent": ("LATENT", {"tooltip": "连接 MiniMaxH3ReferenceToVideo 的目标 LATENT；Native Masked AV 会输出带独立音视频 noise_mask 的采样 latent。"}),
+                "audio_tail_carryover": (["Full Previous Tail", "Match Video Handover"], {"default": "Full Previous Tail"}),
+                "audio_feather_ticks": ("INT", {"default": 0, "min": 0, "max": 256, "step": 1, "advanced": True}),
             }
         }
 
-    RETURN_TYPES = ("MODEL", "CONDITIONING", "MINIMAX_SESSION")
-    RETURN_NAMES = ("model", "conditioning", "session")
+    RETURN_TYPES = ("MODEL", "CONDITIONING", "MINIMAX_SESSION", "LATENT")
+    RETURN_NAMES = ("model", "conditioning", "session", "masked_latent")
     FUNCTION = "apply_cache"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
@@ -288,8 +379,11 @@ class MiniMaxPrefixCacheApplierNode:
         context_video_latent: Optional[Dict[str, Any]] = None,
         anchor_video_latent: Optional[Dict[str, Any]] = None,
         context_audio: Optional[Dict[str, Any]] = None,
-        session: Optional[LongVideoSession] = None
-    ) -> Tuple[Any, Any, LongVideoSession]:
+        session: Optional[LongVideoSession] = None,
+        target_latent: Optional[Dict[str, Any]] = None,
+        audio_tail_carryover: str = "Full Previous Tail",
+        audio_feather_ticks: int = 0,
+    ) -> Tuple[Any, Any, LongVideoSession, Optional[Dict[str, Any]]]:
         cfg = cache_config or KVCacheConfig()
         sess = session or LongVideoSession(cfg)
         if session is not None and cache_config is not None:
@@ -309,7 +403,45 @@ class MiniMaxPrefixCacheApplierNode:
         elif context_audio is not None and "waveform" in context_audio:
             a_ctx = context_audio["waveform"]
 
-        # Prepare next clip (handles Phase 0 warmup, keyframe conditioning injection, and Phase 1 hook injection)
+        if cfg.is_native_masked_av_mode():
+            if ctx_target is None:
+                logger.info("[Native Masked AV] Initial clip: target latent passes through without a protected prefix.")
+                return (model, conditioning, sess, target_latent)
+            if target_latent is None:
+                raise ValueError(
+                    "Native Masked AV mode requires target_latent from MiniMaxH3ReferenceToVideo. "
+                    "Connect the applier's masked_latent output to the sampler latent input."
+                )
+            if v_ctx is None or a_ctx_from_latent is None:
+                raise ValueError("Native Masked AV requires a previous latent containing both video and audio streams")
+            target_video, target_audio = _unpack_latent(target_latent)
+            if target_video is None or target_audio is None:
+                raise ValueError("Native Masked AV requires a target latent containing both video and audio streams")
+            _require_native_masked_av_support()
+            out_v, out_a, video_mask, audio_mask, plan = apply_native_masked_av(
+                target_video=target_video,
+                target_audio=target_audio,
+                source_video=v_ctx,
+                source_audio=a_ctx_from_latent,
+                context_frames=cfg.rolling_frames,
+                audio_tail_carryover=audio_tail_carryover,
+                audio_feather_ticks=audio_feather_ticks,
+            )
+            masked_latent = pack_av_latent(out_v, out_a, target_latent)
+            masked_latent["noise_mask"] = _pack_nested_streams(video_mask, audio_mask)
+            sess.last_rolling_steps = int(plan["context_steps"])
+            sess.last_rolling_frames = int(plan["actual_context_frames"])
+            out_cond = _drop_head_keyframes(conditioning, sess.last_rolling_frames)
+            logger.info(
+                "[Native Masked AV] Protected %d video frames/%d audio ticks; source latent %d:%d.",
+                sess.last_rolling_frames,
+                plan["audio_steps"],
+                plan["start_t"],
+                plan["end_t"],
+            )
+            return (model, out_cond, sess, masked_latent)
+
+        # Safe Native fallback: inject grid-aligned keyframe conditioning only.
         patched_model, out_cond = sess.prepare_next_clip(
             model_patcher=model,
             conditioning=conditioning,
@@ -318,7 +450,7 @@ class MiniMaxPrefixCacheApplierNode:
             anchor_video_latent=v_anc
         )
 
-        return (patched_model, out_cond, sess)
+        return (patched_model, out_cond, sess, target_latent)
 
 
 class MiniMaxTrimPrefixLatentNode:
@@ -370,17 +502,8 @@ class MiniMaxTrimPrefixLatentNode:
         **kwargs
     ) -> Tuple[Optional[torch.Tensor], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         # 1. Determine trim frame count
-        is_decoupled = False
-        if session is not None and getattr(session.config, "is_decoupled_mode", lambda: False)():
-            is_decoupled = True
-        elif cache_config is not None and getattr(cache_config, "is_decoupled_mode", lambda: False)():
-            is_decoupled = True
-
         actual_trim_frames = trim_frames
-        if is_decoupled and trim_frames == 0:
-            actual_trim_frames = 0
-            logger.info("[Trim AV] Decoupled Pure Prefix Mode active: 0 overlap frames to trim, safely passing through.")
-        elif actual_trim_frames <= 0:
+        if actual_trim_frames <= 0:
             if session is not None:
                 # Strictly respect session: 0 for initial clip, >0 for continuation clips
                 actual_trim_frames = session.last_rolling_frames
@@ -454,7 +577,7 @@ class MiniMaxTrimPrefixLatentNode:
 
 
 class MiniMaxCacheMonitorNode:
-    """Provides memory consumption and operational telemetry for Prefix KV Cache."""
+    """Provides operational telemetry for the current continuation session."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -470,22 +593,14 @@ class MiniMaxCacheMonitorNode:
     CATEGORY = "MiniMaxH3/PrefixStream"
 
     def report(self, session: LongVideoSession) -> Tuple[str]:
-        mem = session.cache_manager.get_memory_usage_mb()
-        status_str = "ACTIVE (Reusing Prefix KV across sampling steps)" if session.cache_manager.has_cache(0) else "READY (Step-1 online capture armed)"
+        native_masked = session.config.is_native_masked_av_mode()
+        status_str = "Native Masked AV" if native_masked else "Safe Native fallback"
         report_str = (
-            f"=== MiniMax H3 Prefix KV Cache Telemetry ===\n"
-            f"Cache Engine Status: {status_str}\n"
+            f"=== MiniMax H3 Continuation Telemetry ===\n"
+            f"Mode: {status_str}\n"
             f"Current Clip: #{session.current_clip_index}\n"
-            f"Precision: {session.config.cache_dtype.upper()}\n"
-            f"Device Mode: {session.config.device_mode} (Resolved: {'CPU-Pinned' if session.cache_manager.is_cpu_pinned else 'GPU'})\n"
-            f"Active Prefix Tokens: {session.cache_manager.captured_tokens}\n"
-            f"Denoise Steps Accelerated: {session.cache_manager.skipped_steps_count}\n"
-            f"GPU VRAM Usage: {mem['gpu_mb']:.2f} MB\n"
-            f"CPU Pinned Usage: {mem['cpu_pinned_mb']:.2f} MB\n"
-            f"Total Cache Footprint: {mem['total_mb']:.2f} MB\n"
-            f"Anchor Window: {session.config.anchor_frames} frames ({session.config.anchor_latent_frames} latent steps, ~{session.config.anchor_frames / 24.0:.2f}s)\n"
-            f"Rolling Window: {session.config.rolling_frames} frames ({session.config.rolling_latent_frames} latent steps, ~{session.config.rolling_frames / 24.0:.2f}s)\n"
-            f"Last Overlap Trimmed: {session.last_rolling_frames} frames ({session.last_rolling_steps} latent steps)\n"
+            f"Configured Protected Context: {session.config.rolling_frames} frames\n"
+            f"Last Protected Context: {session.last_rolling_frames} frames ({session.last_rolling_steps} latent steps)\n"
             f"Accumulated Clips: {len(session.accumulated_video_latents)}"
         )
         return (report_str,)

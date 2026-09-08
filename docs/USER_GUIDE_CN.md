@@ -1,7 +1,6 @@
 # ComfyUI-MiniMaxH3-PrefixStream 使用说明指南
 
-本插件专为 **MiniMax H3（海螺视频 DiT 架构）** 设计，通过在底层解耦时空注意力因果性，实现 **Prefix KV Caching（时空前缀键值缓存复用）**。
-在长视频续写与单切片生成中，**消除扩散去噪迭代过程中对已知历史前缀帧的全部冗余 FFN、Norm 与 Linear 计算**，带来约 **40% ~ 48% 的硬件级端到端提速**，并通过**双轨缓存机制（Anchor + Rolling）**彻底解决长距离视频生成中的画质崩塌与人物漂移。
+本插件专为 **MiniMax H3** 长视频续写设计。默认采用 v1.4 **Native Masked AV**：把上一段音视频 Latent 的规范尾部直接复制到新目标开头，并通过 ComfyUI 原生、彼此独立的 video/audio denoise mask 保护；`Safe Native` 保留为关键帧续写兼容方案。
 
 ---
 
@@ -23,33 +22,34 @@
 ## 二、 核心节点详解
 
 ### 1. `MiniMax Prefix Cache Config`（缓存策略配置节点）
-用于定义缓存的存储精度、硬件内存分配策略以及双轨窗口长度（**以创作者直觉的真实画面帧数填入，无需换算 Latent**）。
+用于选择续写方案与保护上下文长度。节点仍保留少量旧缓存字段，以便既有工作流能够正常载入。
 
 | 参数项 | 可选值 / 默认值 | 推荐配置与说明 |
 | :--- | :--- | :--- |
-| **`cache_mode`** | `Safe Native (Zero Artifacts, Recommended)`<br>`Step-1 Dynamic Cache (Experimental Acceleration)`<br>`Decoupled Pure Prefix (Zero Overlap, Prompt-Aligned)`<br>*(默认 `Safe Native`)* | **模式选择与时空解耦核心**：<br>- `Safe Native`（推荐）：采用 100% 原生 ComfyUI Attention 机制，结合时空网格对齐与关键帧去重，**从数学底层彻底杜绝第 0 帧双重 Latent 冲突导致的剧烈闪烁、抽搐与色偏**，画质与原生生成 100% 一致。<br>- `Step-1 Dynamic Cache`：在线动态提取静态条件帧 KV 缓存以提供加速，并自动排除动态文本 Prompt 避免色调漂移。<br>- `Decoupled Pure Prefix`（**终极时空解耦与提示词绝对对齐**）：彻底移除时间轴上的前置重叠帧，前缀仅作为**纯外部只读 KV Cache** 注入 DiT 各层 Attention。**新视频生成严格从 t=0 起跑，用户提示词开头的动作 100% 精准对应新视频的第 0 秒**，免裁切、零去噪拉扯，彻底切断质量衰减链并额外节省约 18%~22% 采样耗时！ |
-| **`cache_dtype`** | `fp8` / `bf16` / `fp16`<br>*(默认 `fp8`)* | **强烈推荐 `fp8`**（在 24GB 显卡如 RTX 3090/4090 上，50 层 KV 显存占用从 7.8GB 骤降至 **~3.9GB**，肉眼画质无损）；若使用 48GB+ 专业显卡（A100/H100），可直接选 `bf16`。 |
-| **`device_mode`** | `auto` / `gpu` / `cpu_pinned`<br>*(默认 `auto`)* | - `auto`：系统空闲显存 > 16GB 时走 GPU 常驻；显存不足时自动降级到 CPU 锁页内存。<br>- `gpu`：速度最快，全驻留显存。<br>- `cpu_pinned`：**零 GPU 显存增量**，通过异步 CUDA Stream 随层预取，杜绝爆显存。 |
-| **`rolling_frames`** | `22` / `5` / `39` / `56` / `73` / `90` / `107` / `124`<br>*(默认 `22`)* | **动态滑动近景窗口（真实物理帧数，严格遵循 VAE 网格）**。默认 **22 帧**（在 24fps 下刚好约 **0.92 秒**，对应 7 步 Latent，起始起点对齐 cycle position 0），负责平滑传承上一段末尾的速度矢量、肢体动势与光照渐变。 |
-| **`use_anchor`** | `True` / `False`<br>*(默认 `False`)* | 是否额外保留第一段的首帧锚点。连续片段接力推荐保持 `False`，由 rolling head 平滑接管开端；仅在希望主角服装面部在跨镜头时被永久强绑定时开启。 |
-| **`anchor_frames`** | `1 ~ 30`<br>*(默认 `5`)* | **世界原点永久锚点（真实物理帧数）**。默认 **5 帧**（约 0.21 秒，对应 2 步 Latent），承载主角初始五官几何与场景基调。 |
+| **`cache_mode`** | `Native Masked AV (v1.4, Recommended)`<br>`Safe Native (Fallback)`<br>*(默认 `Native Masked AV`)* | `Native Masked AV` 直接复制并原生保护上一段 AV Latent，不修改 DiT；视频和音频 mask 相互独立。`Safe Native` 使用原生 Attention 与关键帧条件续写，供旧工作流兼容。 |
+| **`cache_dtype`** | `fp8` / `bf16` / `fp16` | 旧工作流序列化兼容字段；当前两种原生模式均不创建 KV Cache。 |
+| **`device_mode`** | `auto` / `gpu` / `cpu_pinned` | 旧工作流序列化兼容字段；Native Masked AV 使用目标 Latent 所在设备。 |
+| **`rolling_frames`** | `39` / `90` / `141` / `192`<br>*(默认 `39`)* | Native Masked AV 的精确音视频公共边界。39 帧约 1.625 秒，对应 12 个视频 Latent step 与 65 个音频 Latent tick；上下文不能占满整个目标。 |
+| **`use_anchor`** | `True` / `False`<br>*(默认 `False`)* | 仅用于 `Safe Native` 备选方案；Native Masked AV 不使用额外 Anchor KV。 |
+| **`anchor_frames`** | `1 ~ 30`<br>*(默认 `5`)* | 仅用于 `Safe Native` 的原生关键帧锚定。 |
 
 ---
 
 ### 2. `MiniMax Prefix Cache Applier`（核心注入器与条件增强器）
-连接在模型调度链与提示词条件链上，负责在采样器运行前执行单步 Phase 0 预热（提取 KV），并将前缀帧绑定为 `minimax_keyframes` 注入到 `conditioning` 中，同时将 Phase 1 降噪 Hook 注入到模型的 `model_options` 中。
+连接在模型、条件与采样 Latent 之间。默认模式会把上一段 AV Latent 的规范尾部复制到 `target_latent` 开头，创建独立 video/audio `noise_mask`，并清理与保护区冲突的开头关键帧。
 
 * **连接方式（关键插槽）**：
   * `model`：连接自模型加载或调度器的输出端。
   * `conditioning`：**必须连接自正面提示词条件输出（如 `MiniMaxH3ReferenceToVideo` 的 `positive`）**。
   * `cache_config`：连接自 `MiniMax Prefix Cache Config`。
-  * `context_video_latent` *(可选)*：连接上一段视频尾部输出的 Latent（作为动态 Rolling 上下文，支持 NestedTensor 自动解包）。
-  * `anchor_video_latent` *(可选)*：连接初始首帧/参考图像编码后的 Latent（作为永久 Anchor）。
-  * `context_audio` *(可选)*：连接上一段视频尾部的音频（实现音视频同步连续性）。
+  * `target_latent`：连接 `MiniMaxH3ReferenceToVideo` 输出的目标 `LATENT`。
+  * `context_latent`：连接上一段完整的 H3 音视频 Latent（支持 NestedTensor 自动解包）。
+  * `anchor_latent` / `context_audio`：`Safe Native` 兼容输入；Native Masked AV 从 `context_latent` 同时读取视频与音频。
 * **输出**：
-  * `model`：已挂载极速 Block 级 Hook 的模型，输入给采样器（如 `BasicGuider` / `KSampler`）。
-  * `conditioning`：**已注入前置关键帧锚点的条件，输入给采样器的 `conditioning`**。
+  * `model`：原生模型，不安装 DiT Hook。
+  * `conditioning`：已移除保护区内冲突关键帧的条件，输入给采样器。
   * `session`：当前长视频生成会话对象，用于传递给裁切节点、缝合节点或监视器。
+  * `masked_latent`：连接采样器的 `latent_image`；其中已包含原生音视频 denoise mask。
 
 ---
 
@@ -108,13 +108,8 @@
 
 ## 三、 实战工作流指南
 
-### 场景一：单切片加速（图生视频 / 文生视频 40%+ 提速）
-适用于每次只渲染一段视频（如 5 秒），但在输入端提供了首帧图像或参考图像的场景：
-1. `Load Image` $\to$ `VAEEncode` 得到参考 Latent。
-2. 将参考 Latent 接入 `MiniMax Prefix Cache Applier` 的 `anchor_latent` 插槽。
-3. `EmptyLatentVideo` 生成目标画幅（如 1280x720，31 步）。
-4. 执行采样器。在整个采样中，模型只对生成的 31 步计算 QKV 与 FFN，参考帧仅作为只读 KV 注入注意力层。
-5. **实测表现**：计算量直降，且参考帧的角色还原度达到 100% 数学无损。
+### 场景一：首段正常生成
+首段没有历史上下文时，`target_latent` 会原样通过，不创建保护前缀；按普通 MiniMax H3 文生视频、图生视频或首尾帧流程采样即可。
 
 ### 场景二：无限多段长视频连续续写（Infinite Video Chaining）
 适用于需要连续生成 10 秒、30 秒、1 分钟甚至更长故事视频的场景：
@@ -122,13 +117,11 @@
    - 正常文生视频或图生视频。
    - 保存输出的 unified Latent。
 2. **第 2 切片（续写 5~10 秒）**：
-   - 将第 1 切片的首部接入 `anchor_latent`（锁定主角五官外貌）。
-   - 将第 1 切片的尾部接入 `context_latent`（引导动作、运镜与声音延续）。
-   - 采样器生成速度相比传统全序列计算提升约 **1.8x 倍**。
-   - 通过 `MiniMax Long Video Stitcher` 将两段 Latent 缝合，直接接 VAE 解码导出超长无缝视频！
+   - 将第 1 切片完整 AV Latent 接入 `context_latent`。
+   - 将新一段空目标接入 `target_latent`，再把 `masked_latent` 接入采样器。
+   - 默认保护 39 帧视频上下文和与之对齐的音频；采样完成后裁掉重复头部。
 3. **第 3~N 切片**：
-   - 保持 `anchor_latent` 始终为 Clip 1 的首帧（主角永不崩塌）。
-   - 将上一切片的尾部传入 `context_latent`，滚动向前推进。
+   - 始终把上一切片的完整 AV Latent 传入 `context_latent`，滚动向前推进。
 
 ---
 
@@ -152,9 +145,9 @@
 ### Q4: 两段拼接处画面出现微小的闪烁或接缝怎么优化？
 * MiniMax H3 原生包含轻微的随机噪声，将 `MiniMax Long Video Stitcher` 中的 `latent_blend_steps` 设置为 `2` 或 `3`，即可利用潜空间余弦插值消除光影跳跃。
 
-### Q5: 为什么这套方案比传统 Inpainting / Mask 续写更快更清晰？
-* **传统 Mask 续写**：全序列 Token 都还在 Transformer 里跑完整的 QKV 投影和 SwiGLU FFN，且每次重绘都要加噪去噪，误差随切片数指数累加（第 4 段开始画面容易融化）。
-* **Prefix KV Caching**：前缀帧只读冻结，没有重复加噪损耗，且跳过了前缀全部前向矩阵乘法，既快又稳。
+### Q5: Native Masked AV 为什么更稳定？
+* 上一段 AV Latent 被直接复制到目标开头，保护区 mask 为 0，因此无需让模型重新猜测这些历史内容。
+* 视频和音频分别保护，画面交接点与对白尾音可以采用不同长度；这是连续性方案，不宣称 KV 缓存加速。
 
 ---
 
@@ -164,6 +157,6 @@
 
 1. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
    - 感谢 NikoDemon80 在 MiniMax H3 关键帧锚定算法、VAE 时空周期相位网格对齐公式（Snap to Run Grid）、音视频头部裁切及 5/3 音视频时间缩放比例方面的先驱性数学探索与启发。
-2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/Herrgotts/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@Herrgotts](https://github.com/Herrgotts)**
-   - 感谢 Herrgott 提出的无限长视频链式接力构想、上下文对齐平滑接缝理念、以及音视频无缝拼接工作流的探索。
+2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@HerrgottMargott](https://github.com/HerrgottMargott)**
+   - 感谢 v1.4 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
 

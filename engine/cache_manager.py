@@ -13,7 +13,7 @@ logger = logging.getLogger("minimax_prefix_stream")
 
 
 FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
-VIDEO_RUN_GRID = (124, 107, 90, 73, 56, 39, 22, 5)
+VIDEO_RUN_GRID = (192, 175, 158, 141, 124, 107, 90, 73, 56, 39, 22, 5)
 
 
 def snap_to_run_grid(frames: int) -> int:
@@ -53,14 +53,14 @@ def latent_steps_to_pixel_frames(latent_steps: int) -> int:
 @dataclass
 class KVCacheConfig:
     """Configuration for MiniMax H3 Prefix KV Cache."""
-    cache_mode: str = "Safe Native (Zero Artifacts, Recommended)"
+    cache_mode: str = "Native Masked AV (v1.4, Recommended)"
     num_layers: int = 50
     num_heads: int = 56
     head_dim: int = 128
     cache_dtype: str = "fp8"          # "fp8", "bf16", "fp16"
     device_mode: str = "auto"         # "gpu", "cpu_pinned", "auto"
     use_anchor: bool = False          # False avoids redundant anchor collision when rolling tail is present
-    rolling_frames: int = 22          # Real video frames for rolling window (default 22 frames = 7 latent steps)
+    rolling_frames: int = 39          # Protected video context for Native Masked AV
     anchor_frames: int = 5            # Real video frames for anchor (default 5 frames = 2 latent steps)
     temporal_stride: int = 1          # 1 = keep all, 2 = 2x temporal sub-sampling
 
@@ -68,15 +68,14 @@ class KVCacheConfig:
     _rolling_latent_frames: Optional[int] = None
     _anchor_latent_frames: Optional[int] = None
 
-    def is_decoupled_mode(self) -> bool:
-        """Returns True if Decoupled Pure Prefix mode is enabled (zero timeline overlap)."""
+    def is_native_masked_av_mode(self) -> bool:
+        """Return True when v1.4 native per-stream denoise masks are selected."""
         cm = str(self.cache_mode).lower()
-        return "decoupled" in cm or "pure" in cm or "zero_overlap" in cm
+        return "native masked" in cm or "masked av" in cm
 
     def is_cache_enabled(self) -> bool:
         """Returns True if DiT KV caching is enabled; False for 100% native ComfyUI attention."""
-        cm = str(self.cache_mode).lower()
-        return "step" in cm or "dynamic" in cm or "experimental" in cm or self.is_decoupled_mode()
+        return False
 
     @property
     def rolling_latent_frames(self) -> int:
@@ -130,7 +129,7 @@ class PrefixKVCacheManager:
         self._prefetch_slot: Dict[int, Tuple[Optional[torch.Tensor], ...]] = {}
         self._resolved_device_mode = self._resolve_device_mode()
 
-        # Step-1 Dynamic Capture & Runtime Metrics
+        # Legacy telemetry fields retained for serialized-session compatibility.
         self.step_counter: int = 0
         self.is_capturing: bool = False
         self.captured_tokens: int = 0

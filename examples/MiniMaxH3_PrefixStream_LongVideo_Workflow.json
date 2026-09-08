@@ -2,7 +2,7 @@
   "id": "cd1ed691-6262-43d8-a31c-020f849a791b",
   "revision": 0,
   "last_node_id": 376,
-  "last_link_id": 545,
+  "last_link_id": 551,
   "nodes": [
     {
       "id": 2,
@@ -2007,7 +2007,7 @@
           "localized_name": "Latent图像",
           "name": "latent_image",
           "type": "LATENT",
-          "link": 125
+          "link": 551
         }
       ],
       "outputs": [
@@ -4487,16 +4487,16 @@
         "auto",
         false,
         5,
-        "22",
-        "Safe Native (Zero Artifacts, Recommended)"
+        "39",
+        "Native Masked AV (v1.4, Recommended)"
       ],
       "widgets_values_named": {
         "cache_dtype": "fp8",
         "device_mode": "auto",
         "use_anchor": false,
         "anchor_frames": 5,
-        "rolling_frames": "22",
-        "cache_mode": "Safe Native (Zero Artifacts, Recommended)"
+        "rolling_frames": "39",
+        "cache_mode": "Native Masked AV (v1.4, Recommended)"
       },
       "title": "MiniMax H3 Prefix Cache Config (Real Video Frames)"
     },
@@ -4814,7 +4814,7 @@
           "name": "LATENT",
           "type": "LATENT",
           "links": [
-            125
+            550
           ]
         }
       ],
@@ -4857,7 +4857,7 @@
       ],
       "size": [
         360,
-        240
+        330
       ],
       "flags": {},
       "order": 60,
@@ -4902,6 +4902,13 @@
           "shape": 7,
           "type": "MINIMAX_SESSION",
           "link": null
+        },
+        {
+          "localized_name": "target_latent",
+          "name": "target_latent",
+          "shape": 7,
+          "type": "LATENT",
+          "link": 550
         }
       ],
       "outputs": [
@@ -4933,6 +4940,15 @@
             526,
             536
           ]
+        },
+        {
+          "localized_name": "masked_latent",
+          "name": "masked_latent",
+          "type": "LATENT",
+          "slot_index": 3,
+          "links": [
+            551
+          ]
         }
       ],
       "properties": {
@@ -4945,7 +4961,7 @@
           "input_ue_unconnectable": {}
         }
       },
-      "title": "MiniMax H3 Prefix Cache Applier (Safe Native / Zero Artifacts)"
+      "title": "MiniMax H3 Prefix Cache Applier (Native Masked AV v1.4)"
     },
     {
       "id": 363,
@@ -5609,9 +5625,17 @@
       "MODEL"
     ],
     [
-      125,
+      550,
       99,
       1,
+      367,
+      6,
+      "LATENT"
+    ],
+    [
+      551,
+      367,
+      3,
       79,
       4,
       "LATENT"
