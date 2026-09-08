@@ -83,6 +83,40 @@ Restart ComfyUI. The nodes will appear under the category `MiniMaxH3/PrefixStrea
 
 ---
 
+## Acknowledgments & References (致谢与参考项目)
+
+本项目的诞生离不开开源社区与前行者的探索。在此向以下开源项目、作者与团队致以最诚挚的感谢与敬意（排名不分先后）：
+
+1. **[MiniMax AI (Hailuo Team)](https://www.minimax.io/)**
+   - 感谢 MiniMax 团队打造并开源了卓越的 **MiniMax H3** 全模态视音频基座模型，在复杂动作表现力、影视级质感与原生音视频联合生成领域树立了全新标杆。
+   - *Special thanks to the MiniMax AI team for the revolutionary MiniMax H3 omni-modal audio-video foundation model.*
+
+2. **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** by **[@comfyanonymous](https://github.com/comfyanonymous)**
+   - 感谢 ComfyUI 奠定了模块化生成式 AI 的基石，以及对 MiniMax H3 架构、NestedTensor 视音频联合潜空间、内存管理系统的原生支持。
+   - *The cornerstone modular generative AI framework and its native MiniMax H3 implementation.*
+
+3. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
+   - 感谢 NikoDemon80 在 MiniMax H3 关键帧锚定算法、VAE 时空周期相位网格对齐公式（Snap to Run Grid）、音视频头部裁切及 5/3 音视频时间缩放比例方面的先驱性数学探索与启发。
+   - *Pioneering formulations for MiniMax H3 keyframe anchoring, VAE phase grid alignment, and audio-video temporal ratios.*
+
+4. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/Herrgotts/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@Herrgotts](https://github.com/Herrgotts)**
+   - 感谢 Herrgott 提出的无限长视频链式接力构想、上下文对齐平滑接缝理念、以及音视频无缝拼接工作流的探索。
+   - *Groundbreaking principles of infinite video chaining, context-aligned seamless AV joining, and safe tail bridging.*
+
+5. **[ComfyUI-VideoHelperSuite (VHS)](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite)** by **[@Kosinkadink](https://github.com/Kosinkadink)**
+   - 感谢 VHS 套件在 ComfyUI 社区中为视频加载、组合、编码与视音频复用（Muxing）树立的可靠标准与卓越工具链支持。
+   - *The industry-standard toolchain for video loading, encoding, combining, and audio-video muxing in ComfyUI.*
+
+6. **[ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/AIGODLIKE/ComfyUI-MiniMaxH3-TimelineDirector)** by **[AIGODLIKE](https://github.com/AIGODLIKE)**
+   - 感谢其在多镜头剧本式时间线规划、分镜推进与参考图/提示词协同调度方面的思路启发。
+   - *Inspiration for multi-segment timeline orchestration and reference-driven prompt sequencing.*
+
+7. **[TE-Speed-MiniMaxH3](https://github.com/AIGODLIKE/TE-Speed-MiniMaxH3)** / 社区加速探索
+   - 感谢社区早期在 MiniMax H3 推理加速方面的探索，促使我们深入 DiT 注意力层机制并研发出原生的 Prefix KV Caching 解决方案。
+   - *Early community explorations on MiniMax H3 acceleration that inspired our research into clean, mathematical Prefix KV caching.*
+
+---
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
