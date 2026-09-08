@@ -49,6 +49,7 @@ try:
         estimate_luminance_gain,
         apply_luminance_gain_fade,
         _standardize_image_tensor,
+        _standardize_audio_dict,
     )
     from .engine.clip_bin_manager import (
         save_clip_asset,
@@ -83,6 +84,7 @@ except (ImportError, ValueError):
         estimate_luminance_gain,
         apply_luminance_gain_fade,
         _standardize_image_tensor,
+        _standardize_audio_dict,
     )
     from engine.clip_bin_manager import (
         save_clip_asset,
@@ -578,6 +580,9 @@ class MiniMaxLongVideoStitcherNode:
         # 2. Waveform-space audio stitching
         out_stitched_audio = None
         out_trimmed_audio = None
+
+        current_audio = _standardize_audio_dict(current_audio)
+        previous_audio = _standardize_audio_dict(previous_audio)
 
         if current_audio is not None and "waveform" in current_audio:
             curr_total_f = current_images.shape[0] if current_images is not None else 124
@@ -1244,6 +1249,7 @@ class MiniMaxSafeVAEDecodeAudioNode:
 
         try:
             audio = vae.decode(a)
+            audio = _standardize_audio_dict(audio)
             return (audio,)
         except Exception as e:
             logger.warning("[Safe VAE Decode Audio] Failed to decode audio (%s), returning None: %s", getattr(a, 'shape', None), e)

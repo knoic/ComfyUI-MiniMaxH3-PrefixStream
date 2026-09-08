@@ -139,6 +139,19 @@ def test_stitch_node_with_5d_and_4d_images():
     assert stitched_img.shape[0] == 48 + (48 - 22)
     assert trimmed_img.shape[0] == 48 - 22
 
+    # Also test bare Tensor audio input (e.g. torch.Tensor directly without dict)
+    bare_prev_aud = torch.ones((1, 2, 64000), dtype=torch.float32)
+    bare_curr_aud = torch.ones((1, 2, 64000), dtype=torch.float32)
+    out_bare = stitcher.stitch(
+        trim_frames=22,
+        crossfade_frames=4,
+        previous_images=prev_5d,
+        current_images=curr_4d,
+        previous_audio=bare_prev_aud,
+        current_audio=bare_curr_aud
+    )
+    assert out_bare[1] is not None and "waveform" in out_bare[1]
+
 
 if __name__ == "__main__":
     test_node_mappings_consistency()

@@ -137,6 +137,27 @@ def _standardize_image_tensor(images: Optional[torch.Tensor]) -> Optional[torch.
     return t
 
 
+def _standardize_audio_dict(audio: Any, default_sr: int = 32000) -> Optional[Dict[str, Any]]:
+    """Safely normalizes AUDIO input to standard ComfyUI dict {'waveform': Tensor, 'sample_rate': int}.
+    
+    Prevents crash when upstream node outputs bare Tensor or tuple/list instead of dictionary.
+    """
+    if audio is None:
+        return None
+    if isinstance(audio, dict) and "waveform" in audio:
+        return audio
+    if isinstance(audio, torch.Tensor):
+        t = audio
+        if t.ndim == 1:
+            t = t.unsqueeze(0).unsqueeze(0)
+        elif t.ndim == 2:
+            t = t.unsqueeze(0)
+        return {"waveform": t, "sample_rate": default_sr}
+    if isinstance(audio, (list, tuple)) and len(audio) > 0:
+        return _standardize_audio_dict(audio[0], default_sr=default_sr)
+    return None
+
+
 def stitch_video_images(
     prev_images: Optional[torch.Tensor],
     curr_images: torch.Tensor,
@@ -210,6 +231,7 @@ def trim_images_and_audio(
         trimmed_images = images
 
     trimmed_audio = None
+    audio = _standardize_audio_dict(audio)
     if audio is not None and "waveform" in audio:
         waveform = audio["waveform"]
         sr = int(audio.get("sample_rate", 32000))
@@ -236,6 +258,9 @@ def stitch_audio_waveforms(
     fps: float = 24.0
 ) -> Optional[Dict[str, Any]]:
     """Context-aligned audio stitch with de-click crossfade and sample-accurate timeline sync."""
+    curr_audio = _standardize_audio_dict(curr_audio)
+    prev_audio = _standardize_audio_dict(prev_audio)
+
     if curr_audio is None or "waveform" not in curr_audio:
         return prev_audio
 
