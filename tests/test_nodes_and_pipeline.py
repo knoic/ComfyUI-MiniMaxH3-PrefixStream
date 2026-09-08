@@ -118,11 +118,34 @@ def test_workflow_graph_integrity():
                 assert l[3] == nid and l[4] == slot, f"Link {lid} target mismatch!"
 
 
+def test_stitch_node_with_5d_and_4d_images():
+    stitcher = nodes.MiniMaxLongVideoStitcherNode()
+    # 5D previous images [1, F, H, W, C] vs 4D current images [F, H, W, C]
+    prev_5d = torch.ones((1, 48, 32, 32, 3), dtype=torch.float32)
+    curr_4d = torch.ones((48, 32, 32, 3), dtype=torch.float32)
+    prev_aud = {"waveform": torch.ones((1, 2, 64000)), "sample_rate": 32000}
+    curr_aud = {"waveform": torch.ones((1, 2, 64000)), "sample_rate": 32000}
+
+    out = stitcher.stitch(
+        trim_frames=22,
+        crossfade_frames=4,
+        previous_images=prev_5d,
+        current_images=curr_4d,
+        previous_audio=prev_aud,
+        current_audio=curr_aud
+    )
+    stitched_img, stitched_aud, trimmed_img, trimmed_aud = out[0], out[1], out[2], out[3]
+    assert stitched_img.ndim == 4, f"Expected 4D stitched tensor, got {stitched_img.ndim}D"
+    assert stitched_img.shape[0] == 48 + (48 - 22)
+    assert trimmed_img.shape[0] == 48 - 22
+
+
 if __name__ == "__main__":
     test_node_mappings_consistency()
     test_config_node()
     test_av_latent_pack_unpack()
     test_save_and_load_latent_node()
     test_trim_node_pixel_and_waveform()
+    test_stitch_node_with_5d_and_4d_images()
     test_workflow_graph_integrity()
     print("All nodes and pipeline integration tests passed successfully!")

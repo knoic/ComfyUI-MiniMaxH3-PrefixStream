@@ -107,6 +107,36 @@ def apply_luminance_gain_fade(
     return out
 
 
+def _standardize_image_tensor(images: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+    """Standardizes video image tensor to canonical ComfyUI 4D shape: [F, H, W, 3/4].
+    
+    Gracefully handles:
+    - 5D tensors: [1, F, H, W, C], [B, C, F, H, W], [1, C, F, H, W]
+    - 3D tensors: [H, W, C] -> [1, H, W, C]
+    - Channel-first vs channel-last conventions.
+    """
+    if images is None or not isinstance(images, torch.Tensor):
+        return images
+    
+    t = images
+    if t.ndim == 5:
+        # Case 1: [1, F, H, W, C] where last dim is color channels (1, 3, 4)
+        if t.shape[0] == 1 and t.shape[-1] in (1, 3, 4):
+            t = t.squeeze(0)
+        # Case 2: [1, C, F, H, W] where channel dim is at index 1
+        elif t.shape[0] == 1 and t.shape[1] in (1, 3, 4):
+            t = t.squeeze(0).permute(1, 2, 3, 0)
+        # Case 3: [B, C, F, H, W] where B > 1
+        elif t.shape[1] in (1, 3, 4):
+            t = t.permute(0, 2, 3, 4, 1).flatten(0, 1)
+        else:
+            t = t.flatten(0, 1)
+    elif t.ndim == 3:
+        t = t.unsqueeze(0)
+    
+    return t
+
+
 def stitch_video_images(
     prev_images: Optional[torch.Tensor],
     curr_images: torch.Tensor,
@@ -119,6 +149,9 @@ def stitch_video_images(
 
     Guarantees zero VAE artifacts, zero color distortion, and smooth seam transition.
     """
+    prev_images = _standardize_image_tensor(prev_images)
+    curr_images = _standardize_image_tensor(curr_images)
+
     if curr_images is None:
         return prev_images if prev_images is not None else torch.empty(0)
 
@@ -165,8 +198,9 @@ def trim_images_and_audio(
     match_tail: bool = True
 ) -> Tuple[torch.Tensor, Optional[Dict[str, Any]]]:
     """Synchronously trims leading overlap frames from IMAGE and matching samples from AUDIO."""
+    images = _standardize_image_tensor(images)
     n = max(0, int(trim_frames))
-    total_frames = int(images.shape[0])
+    total_frames = int(images.shape[0]) if images is not None else 0
 
     if n >= total_frames:
         trimmed_images = images[:0]

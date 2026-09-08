@@ -48,6 +48,7 @@ try:
         trim_images_and_audio,
         estimate_luminance_gain,
         apply_luminance_gain_fade,
+        _standardize_image_tensor,
     )
     from .engine.clip_bin_manager import (
         save_clip_asset,
@@ -81,6 +82,7 @@ except (ImportError, ValueError):
         trim_images_and_audio,
         estimate_luminance_gain,
         apply_luminance_gain_fade,
+        _standardize_image_tensor,
     )
     from engine.clip_bin_manager import (
         save_clip_asset,
@@ -544,6 +546,9 @@ class MiniMaxLongVideoStitcherNode:
         out_stitched_images = None
         out_trimmed_images = None
 
+        current_images = _standardize_image_tensor(current_images)
+        previous_images = _standardize_image_tensor(previous_images)
+
         if current_images is not None and current_images.shape[0] > 0:
             out_trimmed_images, _ = trim_images_and_audio(
                 images=current_images,
@@ -952,6 +957,8 @@ class MiniMaxClipBinSaverNode:
         if video is None:
             raise ValueError("MiniMaxClipBinSaver: latent contains no video samples.")
 
+        images = _standardize_image_tensor(images)
+
         actual_shot = (shot_tag or "").strip()
         if actual_shot.startswith("Auto") or not actual_shot:
             idx = load_project_index(project_name)
@@ -1190,9 +1197,10 @@ class MiniMaxSafeVAEDecodeNode:
 
         try:
             images = vae.decode(v)
+            images = _standardize_image_tensor(images)
             return (images,)
         except Exception as e:
-            logger.warning("[Safe VAE Decode] Failed to decode samples (%s), returning empty: %s", v.shape, e)
+            logger.warning("[Safe VAE Decode] Failed to decode samples (%s), returning empty: %s", getattr(v, 'shape', None), e)
             return (torch.empty((0, 768, 1344, 3), dtype=torch.float32),)
 
 
