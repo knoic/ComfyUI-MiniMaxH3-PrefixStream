@@ -35,8 +35,28 @@ app.registerExtension({
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+            this.imgs = null;
             setupClipBinPickerWidget(this);
             return r;
+        };
+
+        const onConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+            this.imgs = null;
+            return r;
+        };
+
+        const onExecuted = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function (message) {
+            const r = onExecuted ? onExecuted.apply(this, arguments) : undefined;
+            // Prevent ComfyUI from displaying default preview image in this picker node
+            this.imgs = null;
+            return r;
+        };
+
+        nodeType.prototype.setSizeForImage = function () {
+            // Prevent auto-resizing picker node for image previews
         };
     }
 });
@@ -95,8 +115,12 @@ function setupClipBinPickerWidget(node) {
         hideOnZoom: false,
     });
 
-    // Ensure node has enough width/height to display deck
-    if (node.size[0] < 500) {
+    node.imgs = null;
+
+    // Reset inflated height caused by previous image preview bug, and ensure sufficient dimensions
+    if (node.size[1] > 600 && node.size[0] <= 560) {
+        node.setSize([node.size[0] < 500 ? 520 : node.size[0], 380]);
+    } else if (node.size[0] < 500) {
         node.setSize([520, Math.max(node.size[1], 360)]);
     }
 

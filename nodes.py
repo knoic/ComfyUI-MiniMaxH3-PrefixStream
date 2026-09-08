@@ -904,31 +904,13 @@ class MiniMaxClipBinPickerNode:
         video, audio, tail_tensor, first_tensor, meta_dict = load_clip_asset(p_name, target_clip_id)
         out_latent = pack_av_latent(video, audio)
 
-        project_dir = get_project_dir(p_name)
-        clip_dir = os.path.join(project_dir, target_clip_id)
-
-        try:
-            import folder_paths
-            base_dir = folder_paths.get_output_directory()
-            subfolder = os.path.relpath(clip_dir, base_dir)
-        except Exception:
-            subfolder = ""
-
-        # UI Preview: show tail_frame or preview.png
-        preview_file = "tail_frame.png" if os.path.isfile(os.path.join(clip_dir, "tail_frame.png")) else "preview.png"
-        ui_images = [{
-            "filename": preview_file,
-            "subfolder": subfolder,
-            "type": "output"
-        }]
-
         prompt_str = meta_dict.get("prompt", "")
         frames = meta_dict.get("frames", latent_steps_to_pixel_frames(video.shape[2]))
         logger.info("[Clip Bin Picker] Loaded clip '%s' (%s frames | ⭐%s | tag: '%s')",
                     target_clip_id, frames, meta_dict.get("rating", 3), meta_dict.get("shot_tag", ""))
 
         return {
-            "ui": {"images": ui_images},
+            "ui": {"images": []},
             "result": (out_latent, tail_tensor, first_tensor, prompt_str, target_clip_id)
         }
 
