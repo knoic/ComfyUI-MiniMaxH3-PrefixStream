@@ -4,24 +4,37 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-green.svg)]()
 [![Model](https://img.shields.io/badge/model-MiniMax--H3-orange.svg)]()
 
-一个用于 ComfyUI MiniMax H3 的原生音视频续写与长视频流式生成节点套件。
+面向 **MiniMax H3 长视频生成** 的 ComfyUI 节点套件。它把一段段短片组织成可管理、可选择、可无缝承接的长视频流程：生成片段、归档到素材箱、可视化挑选要承接的镜头，再继续生成下一段。
 
-默认的 **Native Masked AV** 路径参考了 [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)：它将上一段的音视频 latent 复制到新目标的开头，并通过 ComfyUI 原生去噪遮罩独立保护视频与音频。`Safe Native` 保留为基于关键帧的兼容性备选方案。
+它以低侵入方式接入现有的原生 MiniMax H3 工作流：保留你的模型、提示词、采样器与解码链路，只在续写处插入配置与应用节点。默认的 **Native Masked AV** 路径参考了 [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)，使用 ComfyUI 原生去噪遮罩保护上一段的音视频上下文；`Safe Native` 则是兼容性备选方案。
 
 ---
 
 ## 核心特性
 
-- 🛡️ **默认使用 Native Masked AV**：将干净的上一段视频/音频 latent 直接复制到下一段的开头并原地保护；无需修改 DiT，也不使用实验性的 KV 注入。
-- 🎯 **精确的联合音视频边界**：使用 MiniMax H3 兼容的 `39 / 90 / 141 / 192 / ...` 帧网格。默认 39 帧上下文约为 1.625 秒，恰好对应 65 个音频 latent tick。
-- 🎵 **独立的音频保护**：视频和音频分别使用原生遮罩。对白可完整保留上一段音频尾部，并可选用仅影响音频的羽化，使最后的保护 tick 平滑释放。
-- 🔒 **避免条件冲突**：移除受保护视频开头内的关键帧，防止第 0 帧引导与复制的 latent 上下文相互冲突；之后的端点和参考条件仍可正常使用。
-- 🧩 **Safe Native 兼容备选**：对于不能使用 masked latent 的工作流，仍可选择早期的原生注意力/关键帧续写路径。
-- ✂️ **便于无缝拼接的输出**：会话元数据驱动精确的重复开头裁切，支持像素空间视频裁切和同步音频处理，便于最终合成。
+- 🎬 **为长视频续写而生**：每一段既是成片，也是下一段可复用的上下文；自动处理重叠开头裁切与音画同步，让分段生成可以稳定累积为长视频。
+- 🧩 **低侵入地兼容原生 H3 工作流**：不改动 ComfyUI 源码，也不 monkey-patch H3 DiT block。沿用原有模型、提示词、采样和解码节点，只增加续写所需的少量节点。
+- 🛡️ **默认使用 Native Masked AV**：将上一段干净的视频/音频 latent 直接写入下一段开头，并用 ComfyUI 原生遮罩保护；视频、音频各自独立控制。`Safe Native` 保留为兼容性备选。
+- 🗂️ **可视化接力素材箱**：自动归档片段预览、评分、镜头标签、提示词及前后镜头血缘；在画廊中按画面和评分选择任意历史片段，直接接力，而不是靠文件名猜测。
+- 🎯 **准确且可控的上下文**：使用 H3 兼容的 `39 / 90 / 141 / 192 / ...` 帧网格。默认 39 帧约为 1.625 秒，并精确对应 65 个音频 latent tick。
+- 🔒 **减少续写冲突**：移除受保护开头内的关键帧，避免第 0 帧引导与复制的 latent 上下文相互冲突；后续端点和参考条件仍可正常使用。
 
 ---
 
 ## 快速浏览
+
+```text
+原生 MiniMax H3 工作流 → 生成当前片段 → Clip Bin 自动归档
+                                      │
+                                      ▼
+                     在画廊中选择任意历史镜头作为接力来源
+                                      │
+                                      ▼
+                  Continuation Config / Applier → 原生 H3 继续采样
+                                      │
+                                      ▼
+                        裁切重叠开头 → 拼接为长视频 → 再次归档
+```
 
 ### 一个节点选择续写方案
 
