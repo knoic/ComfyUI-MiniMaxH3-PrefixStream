@@ -130,20 +130,10 @@
 
 ## 五、 致谢与参考项目 (Acknowledgments)
 
-本项目的诞生与演进离不开开源社区中多位优秀开发者与团队的先驱性探索。特此向以下项目和作者致以由衷的感谢与敬意：
+本项目的诞生与时空续写设计深受以下开源项目与作者的启发，特此致以诚挚的感谢与敬意：
 
-1. **[MiniMax AI (Hailuo Team)](https://www.minimax.io/)**
-   - 感谢 MiniMax 团队打造并开源了划时代的 **MiniMax H3** 全模态视音频基座模型，在动作表现力、影视级质感与原生音视频联合生成领域树立了业界标杆。
-2. **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** by **[@comfyanonymous](https://github.com/comfyanonymous)**
-   - 感谢 ComfyUI 奠定了模块化生成式 AI 的基石，以及对 MiniMax H3 架构、NestedTensor 视音频联合潜空间、内存管理系统的卓越原生支持。
-3. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
+1. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
    - 感谢 NikoDemon80 在 MiniMax H3 关键帧锚定算法、VAE 时空周期相位网格对齐公式（Snap to Run Grid）、音视频头部裁切及 5/3 音视频时间缩放比例方面的先驱性数学探索与启发。
-4. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/Herrgotts/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@Herrgotts](https://github.com/Herrgotts)**
+2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/Herrgotts/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@Herrgotts](https://github.com/Herrgotts)**
    - 感谢 Herrgott 提出的无限长视频链式接力构想、上下文对齐平滑接缝理念、以及音视频无缝拼接工作流的探索。
-5. **[ComfyUI-VideoHelperSuite (VHS)](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite)** by **[@Kosinkadink](https://github.com/Kosinkadink)**
-   - 感谢 VHS 套件在 ComfyUI 社区中为视频加载、组合、编码与视音频复用（Muxing）树立的可靠标准与卓越工具链支持。
-6. **[ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/AIGODLIKE/ComfyUI-MiniMaxH3-TimelineDirector)** by **[AIGODLIKE](https://github.com/AIGODLIKE)**
-   - 感谢其在多镜头剧本式时间线规划、分镜推进与参考图/提示词协同调度方面的思路启发。
-7. **[TE-Speed-MiniMaxH3](https://github.com/AIGODLIKE/TE-Speed-MiniMaxH3)** / 社区加速探索
-   - 感谢社区早期在 MiniMax H3 推理加速方面的探索，促使我们深入 DiT 注意力层机制并研发出原生的 Prefix KV Caching 解决方案。
 
