@@ -4817,7 +4817,7 @@
       ],
       "size": [
         360,
-        330
+        250
       ],
       "flags": {},
       "order": 60,
@@ -4848,20 +4848,6 @@
           "shape": 7,
           "type": "LATENT",
           "link": 524
-        },
-        {
-          "localized_name": "anchor_latent",
-          "name": "anchor_latent",
-          "shape": 7,
-          "type": "LATENT",
-          "link": null
-        },
-        {
-          "localized_name": "session",
-          "name": "session",
-          "shape": 7,
-          "type": "MINIMAX_SESSION",
-          "link": null
         },
         {
           "localized_name": "target_latent",
@@ -4921,7 +4907,7 @@
           "input_ue_unconnectable": {}
         }
       },
-      "title": "MiniMax H3 Prefix Cache Applier (Native Masked AV)"
+      "title": "MiniMax H3 Continuation Applier (Native Masked AV)"
     },
     {
       "id": 363,
@@ -5589,7 +5575,7 @@
       99,
       1,
       367,
-      6,
+      4,
       "LATENT"
     ],
     [

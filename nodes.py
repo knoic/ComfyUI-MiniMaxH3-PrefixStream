@@ -309,15 +309,8 @@ class MiniMaxPrefixCacheApplierNode:
             },
             "optional": {
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
-                "context_latent": ("LATENT",),
-                "anchor_latent": ("LATENT",),
-                "context_video_latent": ("LATENT",),  # Backward compatibility alias
-                "anchor_video_latent": ("LATENT",),   # Backward compatibility alias
-                "context_audio": ("AUDIO",),          # Optional raw audio waveform fallback
-                "session": ("MINIMAX_SESSION",),
+                "context_latent": ("LATENT", {"tooltip": "上一段完整的 H3 音视频 LATENT。首段生成时留空。"}),
                 "target_latent": ("LATENT", {"tooltip": "连接 MiniMaxH3ReferenceToVideo 的目标 LATENT；Native Masked AV 会输出带独立音视频 noise_mask 的采样 latent。"}),
-                "audio_tail_carryover": (["Full Previous Tail", "Match Video Handover"], {"default": "Full Previous Tail"}),
-                "audio_feather_ticks": ("INT", {"default": 0, "min": 0, "max": 256, "step": 1, "advanced": True}),
             }
         }
 
@@ -332,33 +325,22 @@ class MiniMaxPrefixCacheApplierNode:
         conditioning: Any,
         cache_config: Optional[KVCacheConfig] = None,
         context_latent: Optional[Dict[str, Any]] = None,
-        anchor_latent: Optional[Dict[str, Any]] = None,
-        context_video_latent: Optional[Dict[str, Any]] = None,
-        anchor_video_latent: Optional[Dict[str, Any]] = None,
-        context_audio: Optional[Dict[str, Any]] = None,
-        session: Optional[LongVideoSession] = None,
         target_latent: Optional[Dict[str, Any]] = None,
-        audio_tail_carryover: str = "Full Previous Tail",
-        audio_feather_ticks: int = 0,
+        **legacy: Any,
     ) -> Tuple[Any, Any, LongVideoSession, Optional[Dict[str, Any]]]:
         cfg = cache_config or KVCacheConfig()
+        session = legacy.get("session")
         sess = session or LongVideoSession(cfg)
         if session is not None and cache_config is not None:
             sess.config = cfg
 
-        ctx_target = context_latent if context_latent is not None else context_video_latent
-        anc_target = anchor_latent if anchor_latent is not None else anchor_video_latent
+        # Legacy aliases are accepted only for previously saved workflows; they
+        # are intentionally absent from the user-facing node interface.
+        ctx_target = context_latent if context_latent is not None else legacy.get("context_video_latent")
 
         # Unpack video and audio from latents (supports ComfyUI NestedTensor from H3ContinuousLoadLatent)
         v_ctx, a_ctx_from_latent = _unpack_latent(ctx_target)
-        v_anc, _ = _unpack_latent(anc_target)
-
-        # Audio priority: extracted from context_latent or explicit context_audio
-        a_ctx = None
-        if a_ctx_from_latent is not None:
-            a_ctx = a_ctx_from_latent
-        elif context_audio is not None and "waveform" in context_audio:
-            a_ctx = context_audio["waveform"]
+        a_ctx = a_ctx_from_latent
 
         def safe_native_result(reason: Optional[Exception] = None):
             """Run the compatibility path when a native AV mask cannot be built."""
@@ -373,7 +355,7 @@ class MiniMaxPrefixCacheApplierNode:
                 conditioning=conditioning,
                 previous_video_latent=v_ctx,
                 previous_audio_latent=a_ctx,
-                anchor_video_latent=v_anc,
+                anchor_video_latent=None,
             )
             return (patched_model, out_cond, sess, target_latent)
 
@@ -404,8 +386,8 @@ class MiniMaxPrefixCacheApplierNode:
                     source_video=v_ctx,
                     source_audio=a_ctx_from_latent,
                     context_frames=cfg.rolling_frames,
-                    audio_tail_carryover=audio_tail_carryover,
-                    audio_feather_ticks=audio_feather_ticks,
+                    audio_tail_carryover="Full Previous Tail",
+                    audio_feather_ticks=0,
                 )
             except ValueError as exc:
                 geometry_errors = (

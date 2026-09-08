@@ -40,7 +40,6 @@
   * `cache_config`：连接自 `MiniMax H3 Continuation Config`。
   * `target_latent`：连接 `MiniMaxH3ReferenceToVideo` 输出的目标 `LATENT`。
   * `context_latent`：连接上一段完整的 H3 音视频 Latent（支持 NestedTensor 自动解包）。
-  * `anchor_latent` / `context_audio`：`Safe Native` 兼容输入；Native Masked AV 从 `context_latent` 同时读取视频与音频。
 * **输出**：
   * `model`：原生模型，不安装 DiT Hook。
   * `conditioning`：已移除保护区内冲突关键帧的条件，输入给采样器。
@@ -68,7 +67,7 @@
 ---
 
 ### 5. `MiniMax Cache Telemetry Monitor`（遥测监视器）
-连接 `session`，输出当前显存开销、CPU 搬运占用、切片序号、实际裁切帧数等实时诊断信息，可在 ComfyUI 中接 `ShowText` 实时查看。
+连接 `session`，输出当前续写模式、切片序号与实际裁切帧数，可在 ComfyUI 中接 `ShowText` 实时查看。
 
 ---
 

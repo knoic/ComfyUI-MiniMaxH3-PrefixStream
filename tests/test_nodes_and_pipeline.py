@@ -42,6 +42,11 @@ def test_config_node():
     assert not cfg.is_cache_enabled()
 
 
+def test_applier_exposes_only_continuation_inputs():
+    optional = nodes.MiniMaxPrefixCacheApplierNode.INPUT_TYPES()["optional"]
+    assert set(optional) == {"cache_config", "context_latent", "target_latent"}
+
+
 def test_av_latent_pack_unpack():
     v = torch.randn(1, 24, 10, 16, 16)
     a = torch.randn(1, 32, 2, 16)
