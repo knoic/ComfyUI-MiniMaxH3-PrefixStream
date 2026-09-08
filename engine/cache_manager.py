@@ -122,7 +122,7 @@ class PrefixKVCacheManager:
 
         # CPU-pinned streaming support
         self._stream: Optional[torch.cuda.Stream] = None
-        self._prefetch_slot: Dict[str, Optional[Tuple[torch.Tensor, torch.Tensor]]] = {}
+        self._prefetch_slot: Dict[int, Tuple[Optional[torch.Tensor], ...]] = {}
         self._resolved_device_mode = self._resolve_device_mode()
 
         # Step-1 Dynamic Capture & Runtime Metrics
@@ -165,8 +165,11 @@ class PrefixKVCacheManager:
 
         if self.is_cpu_pinned:
             t = t.cpu()
-            if not t.is_pinned():
-                t = t.pin_memory()
+            if torch.cuda.is_available() and not t.is_pinned():
+                try:
+                    t = t.pin_memory()
+                except Exception:
+                    pass
         return t
 
     def set_anchor_kv(self, layer_idx: int, k: torch.Tensor, v: torch.Tensor) -> None:
@@ -196,12 +199,22 @@ class PrefixKVCacheManager:
         compute_dtype: torch.dtype
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Fetch and concatenate Anchor + Rolling KV for layer_idx, cast to compute_dtype on target_device."""
+        if self.is_cpu_pinned and self._stream is not None and torch.cuda.is_available():
+            torch.cuda.current_stream().wait_stream(self._stream)
+
+        prefetched = self._prefetch_slot.pop(layer_idx, None) if self.is_cpu_pinned else None
+        if prefetched is not None:
+            ak, av, rk, rv = prefetched
+        else:
+            ak = self._anchor_k[layer_idx]
+            av = self._anchor_v[layer_idx]
+            rk = self._rolling_k[layer_idx]
+            rv = self._rolling_v[layer_idx]
+
         k_parts = []
         v_parts = []
 
         # 1. Anchor KV
-        ak = self._anchor_k[layer_idx]
-        av = self._anchor_v[layer_idx]
         if ak is not None and av is not None:
             if ak.device != target_device:
                 ak = ak.to(target_device, non_blocking=True)
@@ -213,8 +226,6 @@ class PrefixKVCacheManager:
             v_parts.append(av)
 
         # 2. Rolling KV
-        rk = self._rolling_k[layer_idx]
-        rv = self._rolling_v[layer_idx]
         if rk is not None and rv is not None:
             if rk.device != target_device:
                 rk = rk.to(target_device, non_blocking=True)
@@ -250,19 +261,17 @@ class PrefixKVCacheManager:
                 av = self._anchor_v[next_layer_idx]
                 rk = self._rolling_k[next_layer_idx]
                 rv = self._rolling_v[next_layer_idx]
-                if ak is not None:
-                    ak.to(target_device, non_blocking=True)
-                if av is not None:
-                    av.to(target_device, non_blocking=True)
-                if rk is not None:
-                    rk.to(target_device, non_blocking=True)
-                if rv is not None:
-                    rv.to(target_device, non_blocking=True)
+                ak_gpu = ak.to(target_device, non_blocking=True) if ak is not None else None
+                av_gpu = av.to(target_device, non_blocking=True) if av is not None else None
+                rk_gpu = rk.to(target_device, non_blocking=True) if rk is not None else None
+                rv_gpu = rv.to(target_device, non_blocking=True) if rv is not None else None
+                self._prefetch_slot[next_layer_idx] = (ak_gpu, av_gpu, rk_gpu, rv_gpu)
 
     def clear_rolling(self) -> None:
         """Clear only rolling cache (e.g. at scene cut / jump)."""
         self._rolling_k = [None] * self.config.num_layers
         self._rolling_v = [None] * self.config.num_layers
+        self._prefetch_slot.clear()
 
     def reset_step_counter(self) -> None:
         """Reset step counter for a new sampling run."""
@@ -281,6 +290,7 @@ class PrefixKVCacheManager:
         self.skipped_steps_count = 0
         self._anchor_k = [None] * self.config.num_layers
         self._anchor_v = [None] * self.config.num_layers
+        self._prefetch_slot.clear()
         self.clear_rolling()
 
     def get_memory_usage_mb(self) -> Dict[str, float]:

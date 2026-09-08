@@ -158,15 +158,25 @@ def _make_block_patch(
         if mode == "denoise":
             # Identify condition token bounds (cond & cond_audio).
             # Text tokens (0..text_len) MUST NOT be cached, as their timestep t_v = 1 - sigma varies every step.
-            layout = args.get("layout")
+            layout = args.get("layout") or transformer_options.get("layout")
+            segments = getattr(layout, "segments", None)
+            if segments is None and isinstance(layout, (list, tuple)):
+                segments = layout
+            if segments is None:
+                mod_segs = args.get("mod_segments")
+                if isinstance(mod_segs, (list, tuple)):
+                    segments = mod_segs
+
             cond_start = None
             cond_end = None
-            if layout is not None and hasattr(layout, "segments"):
-                for a, b, kind in layout.segments:
-                    if kind in ("cond", "cond_audio"):
-                        if cond_start is None:
-                            cond_start = a
-                        cond_end = b
+            if segments is not None:
+                for seg in segments:
+                    if len(seg) >= 3:
+                        a, b, kind = seg[0], seg[1], seg[2]
+                        if kind in ("cond", "cond_audio"):
+                            if cond_start is None:
+                                cond_start = a
+                            cond_end = b
 
             # If no prefix condition tokens exist, pass through natively
             if cond_start is None or cond_end is None or cond_end <= cond_start:
@@ -185,8 +195,8 @@ def _make_block_patch(
                         q, k, v = _apply_rope_and_norm(attn_mod, q, k, v, rope_freqs)
 
                         # Extract ONLY invariant condition Key and Value (cond_start..cond_end)
-                        k_cond = k[:, :, cond_start:cond_end, :]
-                        v_cond = v[:, :, cond_start:cond_end, :]
+                        k_cond = k[:, :, cond_start:cond_end, :].contiguous()
+                        v_cond = v[:, :, cond_start:cond_end, :].contiguous()
 
                         # Store in cache manager (quantizes & pins if configured)
                         cache_manager.set_rolling_kv(layer_idx, k_cond, v_cond)
@@ -218,7 +228,8 @@ def _make_block_patch(
 
             # Branch 2B: Steps 2..N Prefix KV Reuse
             next_layer = layer_idx + 1
-            cache_manager.prefetch_next_layer(next_layer, args["img"].device)
+            device = args["img"].device if "img" in args and hasattr(args["img"], "device") else torch.device("cpu")
+            cache_manager.prefetch_next_layer(next_layer, device)
 
             if layer_idx == 0:
                 cache_manager.skipped_steps_count += 1
@@ -242,9 +253,14 @@ def _make_block_patch(
                         compute_dtype=q.dtype
                     )
 
-                    # Concatenate dynamically updated text, cached condition, and dynamically updated target
-                    k_total = torch.cat([k_dyn[:, :, :cond_start, :], k_cond, k_dyn[:, :, cond_end:, :]], dim=2)
-                    v_total = torch.cat([v_dyn[:, :, :cond_start, :], v_cond, v_dyn[:, :, cond_end:, :]], dim=2)
+                    # Verify expected sequence length before concatenation
+                    expected_cond_len = cond_end - cond_start
+                    if k_cond.shape[2] == expected_cond_len:
+                        k_total = torch.cat([k_dyn[:, :, :cond_start, :], k_cond, k_dyn[:, :, cond_end:, :]], dim=2)
+                        v_total = torch.cat([v_dyn[:, :, :cond_start, :], v_cond, v_dyn[:, :, cond_end:, :]], dim=2)
+                    else:
+                        k_total = k_dyn
+                        v_total = v_dyn
 
                     out = asymmetric_cached_attention(
                         q=q,

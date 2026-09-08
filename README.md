@@ -68,9 +68,23 @@ Clone this repository into your ComfyUI `custom_nodes` directory:
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/knoic/ComfyUI-MiniMaxH3-PrefixStream.git
+cd ComfyUI-MiniMaxH3-PrefixStream
+pip install -r requirements.txt
 ```
 
 Restart ComfyUI. The nodes will appear under the category `MiniMaxH3/PrefixStream`.
+
+---
+
+## Running Unit Tests
+
+Verify everything locally:
+
+```bash
+python tests/test_cache_manager.py
+python tests/test_fused_attention.py
+python tests/test_nodes_and_pipeline.py
+```
 
 ---
 

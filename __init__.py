@@ -1,32 +1,43 @@
 """ComfyUI-MiniMaxH3-PrefixStream
 
 A high-performance Prefix KV Caching & Streaming Chaining Suite for MiniMax H3.
-Slashes DiT computation by ~45% and prevents long-video degradation via Dual-Tier
-(Anchor + Rolling) Attention Caching.
+Slashes DiT computation and prevents long-video degradation via Dual-Tier
+(Anchor + Rolling) Attention Caching and Seamless AV Handover.
 """
 
-from .nodes import (
-    MiniMaxPrefixCacheConfigNode,
-    MiniMaxPrefixCacheApplierNode,
-    MiniMaxTrimPrefixLatentNode,
-    MiniMaxLongVideoStitcherNode,
-    MiniMaxCacheMonitorNode,
-)
+try:
+    from .nodes import (
+        MiniMaxPrefixCacheConfigNode,
+        MiniMaxPrefixCacheApplierNode,
+        MiniMaxTrimPrefixLatentNode,
+        MiniMaxLongVideoStitcherNode,
+        MiniMaxCacheMonitorNode,
+        MiniMaxSaveLatentNode,
+        MiniMaxLoadLatentNode,
+        NODE_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS,
+    )
+except (ImportError, ValueError):
+    from nodes import (
+        MiniMaxPrefixCacheConfigNode,
+        MiniMaxPrefixCacheApplierNode,
+        MiniMaxTrimPrefixLatentNode,
+        MiniMaxLongVideoStitcherNode,
+        MiniMaxCacheMonitorNode,
+        MiniMaxSaveLatentNode,
+        MiniMaxLoadLatentNode,
+        NODE_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS,
+    )
 
-NODE_CLASS_MAPPINGS = {
-    "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
-    "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
-    "MiniMaxTrimPrefixLatent": MiniMaxTrimPrefixLatentNode,
-    "MiniMaxLongVideoStitcher": MiniMaxLongVideoStitcherNode,
-    "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxPrefixCacheConfig": "MiniMax H3 Prefix Cache Config",
-    "MiniMaxPrefixCacheApplier": "MiniMax H3 Prefix Cache Applier",
-    "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (Auto-Crop)",
-    "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher",
-    "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
-}
-
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+__all__ = [
+    "MiniMaxPrefixCacheConfigNode",
+    "MiniMaxPrefixCacheApplierNode",
+    "MiniMaxTrimPrefixLatentNode",
+    "MiniMaxLongVideoStitcherNode",
+    "MiniMaxCacheMonitorNode",
+    "MiniMaxSaveLatentNode",
+    "MiniMaxLoadLatentNode",
+    "NODE_CLASS_MAPPINGS",
+    "NODE_DISPLAY_NAME_MAPPINGS",
+]

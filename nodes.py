@@ -821,7 +821,14 @@ class MiniMaxLoadLatentNode:
         if st_load is not None:
             tensors = st_load(target_file, device="cpu")
         else:
-            tensors = torch.load(target_file, map_location="cpu")
+            try:
+                tensors = torch.load(target_file, map_location="cpu")
+            except RuntimeError as exc:
+                if "safetensors is not installed" in str(exc):
+                    with open(target_file, "rb") as f:
+                        tensors = torch.load(f, map_location="cpu")
+                else:
+                    raise
 
         if "video" not in tensors:
             raise ValueError(f"MiniMaxLoadLatent: '{target_file}' does not contain 'video' tensor.")
