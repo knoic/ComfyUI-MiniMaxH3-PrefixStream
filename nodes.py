@@ -95,7 +95,16 @@ except (ImportError, ValueError):
     )
 
 
+class AnyType(str):
+    """Wildcard type for ComfyUI input slots to accept multiple types (STRING, VHS_FILENAMES, etc.)."""
+    def __ne__(self, __value: object) -> bool:
+        return False
 
+    def __eq__(self, __value: object) -> bool:
+        return True
+
+
+any_type = AnyType("*")
 
 
 class MiniMaxPrefixCacheConfigNode:
@@ -914,7 +923,7 @@ class MiniMaxClipBinSaverNode:
                 "images": ("IMAGE", {"tooltip": "【渲染像素画面】连接当前片段解码后的画面 (来自 VAEDecode 或 TrimPrefix)。连接后系统将自动截取真实的首帧与尾帧，生成超高清并排缩略图卡片！"}),
                 "prompt": ("STRING", {"default": "", "tooltip": "【本段正向提示词】连接输入文本 (Input Text/Prompt)。自动入库保存到 meta.json，以便后续回顾镜头剧情与接力参考"}),
                 "parent_clip_id": ("STRING", {"default": "", "tooltip": "【父镜头血缘ID】连接上一段 Clip Bin Picker 输出的 clip_id。用于在元数据中清晰记录多版本分支历史与承接血缘"}),
-                "video_file_name": ("STRING", {"default": "", "tooltip": "【关联合成视频名】连接当前片段合成保存节点 (VHS_VideoCombine) 的 Filenames 输出，或手动输入关联的 MP4 文件名，建立视频与潜空间的 1:1 双向索引"}),
+                "video_file_name": (any_type, {"default": "", "tooltip": "【关联合成视频名】连接当前片段合成保存节点 (VHS_VideoCombine) 的 Filenames 输出，或手动输入关联的 MP4 文件名，建立视频与潜空间的 1:1 双向索引"}),
             }
         }
 

@@ -5284,7 +5284,7 @@
         },
         {
           "name": "video_file_name",
-          "type": "STRING",
+          "type": "*",
           "widget": {
             "name": "video_file_name"
           },
@@ -6352,7 +6352,7 @@
       0,
       376,
       7,
-      "VHS_FILENAMES"
+      "*"
     ]
   ],
   "groups": [
