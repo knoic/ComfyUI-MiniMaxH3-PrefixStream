@@ -100,10 +100,29 @@ def test_trim_node_pixel_and_waveform():
     assert out_aud["waveform"].shape[-1] == 32000
 
 
+def test_workflow_graph_integrity():
+    import json
+    wf_file = os.path.join(_repo_dir, "examples", "MiniMaxH3_PrefixStream_LongVideo_Workflow.json")
+    if not os.path.exists(wf_file):
+        return
+    with open(wf_file, "r", encoding="utf-8") as f:
+        wf = json.load(f)
+    nodes_dict = {n["id"]: n for n in wf.get("nodes", [])}
+    links_dict = {l[0]: l for l in wf.get("links", []) if l}
+    for nid, n in nodes_dict.items():
+        for slot, inp in enumerate(n.get("inputs", [])):
+            lid = inp.get("link")
+            if lid is not None:
+                assert lid in links_dict, f"Link {lid} on Node {nid} slot {slot} missing from global links!"
+                l = links_dict[lid]
+                assert l[3] == nid and l[4] == slot, f"Link {lid} target mismatch!"
+
+
 if __name__ == "__main__":
     test_node_mappings_consistency()
     test_config_node()
     test_av_latent_pack_unpack()
     test_save_and_load_latent_node()
     test_trim_node_pixel_and_waveform()
+    test_workflow_graph_integrity()
     print("All nodes and pipeline integration tests passed successfully!")
