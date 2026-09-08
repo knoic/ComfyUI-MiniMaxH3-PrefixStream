@@ -4,6 +4,8 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-green.svg)]()
 [![Model](https://img.shields.io/badge/model-MiniMax--H3-orange.svg)]()
 
+[English](README_EN.md) | 简体中文
+
 面向 **MiniMax H3 长视频生成** 的 ComfyUI 节点套件。它把一段段短片组织成可管理、可选择、可无缝承接的长视频流程：生成片段、归档到素材箱、可视化挑选要承接的镜头，再继续生成下一段。
 
 它以低侵入方式接入现有的原生 MiniMax H3 工作流：保留你的模型、提示词、采样器与解码链路，只在续写处插入配置与应用节点。默认的 **Native Masked AV** 路径参考了 [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)，使用 ComfyUI 原生去噪遮罩保护上一段的音视频上下文；`Safe Native` 则是兼容性备选方案。
