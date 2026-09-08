@@ -97,8 +97,8 @@ python tests/test_native_masked_av.py
 
 ## Example Workflow & Documentation
 
-- 📄 **Ready-to-Use Workflow**: [`examples/MiniMaxH3_PrefixStream_LongVideo_Workflow.json`](examples/MiniMaxH3_PrefixStream_LongVideo_Workflow.json)
-  - Drag and drop this JSON directly into your ComfyUI canvas to run PrefixStream long video generation.
+- 📄 **Ready-to-Use Workflow**: [`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
+  - Drag and drop this complete 42-node JSON directly into your ComfyUI canvas to run PrefixStream long video generation.
 - 📖 **Detailed Chinese User Guide (中文详细使用指南)**: [`docs/USER_GUIDE_CN.md`](docs/USER_GUIDE_CN.md)
   - Includes hardware recommendations, parameter tuning, multi-clip infinite continuation walkthroughs, and FAQ.
 
