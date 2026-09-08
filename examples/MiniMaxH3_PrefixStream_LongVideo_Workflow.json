@@ -4405,57 +4405,25 @@
       ],
       "size": [
         350,
-        180
+        100
       ],
       "flags": {},
       "order": 38,
       "mode": 0,
       "inputs": [
         {
-          "name": "cache_dtype",
-          "type": "COMBO",
-          "widget": {
-            "name": "cache_dtype"
-          },
-          "link": null
-        },
-        {
-          "name": "device_mode",
-          "type": "COMBO",
-          "widget": {
-            "name": "device_mode"
-          },
-          "link": null
-        },
-        {
-          "name": "use_anchor",
-          "type": "BOOLEAN",
-          "widget": {
-            "name": "use_anchor"
-          },
-          "link": null
-        },
-        {
-          "name": "anchor_frames",
-          "type": "INT",
-          "widget": {
-            "name": "anchor_frames"
-          },
-          "link": null
-        },
-        {
-          "name": "rolling_frames",
-          "type": "COMBO",
-          "widget": {
-            "name": "rolling_frames"
-          },
-          "link": null
-        },
-        {
           "name": "cache_mode",
           "type": "COMBO",
           "widget": {
             "name": "cache_mode"
+          },
+          "link": null
+        },
+        {
+          "name": "continuation_frames",
+          "type": "COMBO",
+          "widget": {
+            "name": "continuation_frames"
           },
           "link": null
         }
@@ -4483,22 +4451,14 @@
         }
       },
       "widgets_values": [
-        "fp8",
-        "auto",
-        false,
-        5,
-        "39",
-        "Native Masked AV (Recommended)"
+        "Native Masked AV (Recommended)",
+        "39"
       ],
       "widgets_values_named": {
-        "cache_dtype": "fp8",
-        "device_mode": "auto",
-        "use_anchor": false,
-        "anchor_frames": 5,
-        "rolling_frames": "39",
-        "cache_mode": "Native Masked AV (Recommended)"
+        "cache_mode": "Native Masked AV (Recommended)",
+        "continuation_frames": "39"
       },
-      "title": "MiniMax H3 Prefix Cache Config (Real Video Frames)"
+      "title": "MiniMax H3 Continuation Config"
     },
     {
       "id": 87,

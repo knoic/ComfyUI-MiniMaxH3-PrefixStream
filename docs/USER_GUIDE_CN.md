@@ -21,27 +21,23 @@
 
 ## 二、 核心节点详解
 
-### 1. `MiniMax Prefix Cache Config`（缓存策略配置节点）
-用于选择续写方案与保护上下文长度。节点仍保留少量旧缓存字段，以便既有工作流能够正常载入。
+### 1. `MiniMax H3 Continuation Config`（续写配置节点）
+只提供创作者可见的视频续写参数：续写方案和上下文帧数。
 
 | 参数项 | 可选值 / 默认值 | 推荐配置与说明 |
 | :--- | :--- | :--- |
 | **`cache_mode`** | `Native Masked AV (Recommended)`<br>`Safe Native (Fallback)`<br>*(默认 `Native Masked AV`)* | `Native Masked AV` 直接复制并原生保护上一段 AV Latent，不修改 DiT；视频和音频 mask 相互独立。`Safe Native` 使用原生 Attention 与关键帧条件续写，供旧工作流兼容。 |
-| **`cache_dtype`** | `fp8` / `bf16` / `fp16` | 旧工作流序列化兼容字段；当前两种原生模式均不创建 KV Cache。 |
-| **`device_mode`** | `auto` / `gpu` / `cpu_pinned` | 旧工作流序列化兼容字段；Native Masked AV 使用目标 Latent 所在设备。 |
-| **`rolling_frames`** | `39` / `90` / `141` / `192`<br>*(默认 `39`)* | Native Masked AV 的精确音视频公共边界。39 帧约 1.625 秒，对应 12 个视频 Latent step 与 65 个音频 Latent tick；上下文不能占满整个目标。 |
-| **`use_anchor`** | `True` / `False`<br>*(默认 `False`)* | 仅用于 `Safe Native` 备选方案；Native Masked AV 不使用额外 Anchor KV。 |
-| **`anchor_frames`** | `1 ~ 30`<br>*(默认 `5`)* | 仅用于 `Safe Native` 的原生关键帧锚定。 |
+| **`continuation_frames`** | `39` / `90` / `141` / `192`<br>*(默认 `39`)* | 用户可见的视频续写上下文帧数。39 帧约 1.625 秒，对应 12 个视频 Latent step 与 65 个音频 Latent tick；上下文不能占满整个目标。 |
 
 ---
 
-### 2. `MiniMax Prefix Cache Applier`（核心注入器与条件增强器）
+### 2. `MiniMax H3 Continuation Applier`（续写应用节点）
 连接在模型、条件与采样 Latent 之间。默认模式会把上一段 AV Latent 的规范尾部复制到 `target_latent` 开头，创建独立 video/audio `noise_mask`，并清理与保护区冲突的开头关键帧。
 
 * **连接方式（关键插槽）**：
   * `model`：连接自模型加载或调度器的输出端。
   * `conditioning`：**必须连接自正面提示词条件输出（如 `MiniMaxH3ReferenceToVideo` 的 `positive`）**。
-  * `cache_config`：连接自 `MiniMax Prefix Cache Config`。
+  * `cache_config`：连接自 `MiniMax H3 Continuation Config`。
   * `target_latent`：连接 `MiniMaxH3ReferenceToVideo` 输出的目标 `LATENT`。
   * `context_latent`：连接上一段完整的 H3 音视频 Latent（支持 NestedTensor 自动解包）。
   * `anchor_latent` / `context_audio`：`Safe Native` 兼容输入；Native Masked AV 从 `context_latent` 同时读取视频与音频。
@@ -127,10 +123,9 @@
 
 ## 四、 常见问题与避坑指南 (FAQ)
 
-### Q1: 为什么之前滑动窗口参数最大只能填 16 帧？
-* **原因**：早期版本参数是以 **Latent 步数**（`rolling_latent_frames`）计量的，由于 MiniMax H3 的时间轴约 4 帧压成 1 步 Latent，16 步 Latent 实际上相当于 **64 实际视频帧**。部分用户误以为只能滑 16 帧（不足 1 秒）。
-* **已优化**：现已升级为直观的 **实际视频帧数** `rolling_frames`（范围 **4 ~ 124 帧**，最大可覆盖 124 帧单切片全长！）；对于保留旧节点的用户，兼容项上限也已放开至 64 步。
-* **⚠️ 重要提醒**：若界面滑块依然卡在 16，是因为 ComfyUI 只在启动时加载一次 Python 节点定义。**更新插件代码后必须完全重启 ComfyUI 后端服务，并在浏览器中按 `Ctrl + F5` 强制刷新页面**，才能载入最新的 124 帧控件定义。
+### Q1: 为什么只显示视频帧数？
+* `continuation_frames` 是你在导出视频中看到的帧数；无需了解模型内部的 latent 时间步。
+* 更新插件后必须完全重启 ComfyUI 后端，并在浏览器中按 `Ctrl + F5` 强制刷新，才能加载精简后的节点界面。
 
 ### Q2: 为什么画面和音频的 Latent 不用分开连线？
 * **MiniMax H3 的原生特性**：MiniMax H3 与传统单模态视频模型不同，它在生成时是音视频联合生成的，ComfyUI 官方将其打包为 `NestedTensor((video, audio))` 封装在同一个 `LATENT`（粉色端口）中。
@@ -138,9 +133,8 @@
 * **极简连线**：无需在缝合前将音频解码为波形，缝合节点输出的单个粉色 `stitched_latent` 端口直接分发连接给 `VAEDecode`（解码画面）与 `VAEDecodeAudio`（解码声音），音画自动严丝合缝、声画对齐！
 
 ### Q3: 提示 `CUDA out of memory` (显存溢出) 怎么办？
-* **方案 A**：检查 `MiniMax Prefix Cache Config`，确保 `cache_dtype` 设置为 `fp8`（显存占用直接砍半）。
-* **方案 B**：将 `device_mode` 从 `gpu` 切换为 `cpu_pinned`。缓存将全部驻留在主机物理内存中，GPU 显存开销降为 0 MB。
-* **方案 C**：适当缩减 `rolling_frames`（如设为 24 帧，约 1 秒过渡）。
+* 将 `continuation_frames` 调低到 `39`；这是推荐起点。
+* 降低目标视频分辨率、时长或采样步数，并关闭其他占用显存的模型与预览。
 
 ### Q4: 两段拼接处画面出现微小的闪烁或接缝怎么优化？
 * MiniMax H3 原生包含轻微的随机噪声，将 `MiniMax Long Video Stitcher` 中的 `latent_blend_steps` 设置为 `2` 或 `3`，即可利用潜空间余弦插值消除光影跳跃。

@@ -26,17 +26,15 @@ def test_node_mappings_consistency():
 def test_config_node():
     cfg_node = nodes.MiniMaxPrefixCacheConfigNode()
     mode_choices = cfg_node.INPUT_TYPES()["required"]["cache_mode"][0]
+    frame_choices = cfg_node.INPUT_TYPES()["required"]["continuation_frames"][0]
     assert mode_choices == [
         "Native Masked AV (Recommended)",
         "Safe Native (Fallback)",
     ]
+    assert frame_choices == ["39", "90", "141", "192"]
     (cfg,) = cfg_node.create_config(
         cache_mode="Native Masked AV (Recommended)",
-        cache_dtype="fp8",
-        device_mode="auto",
-        rolling_frames="39",
-        use_anchor=False,
-        anchor_frames=5
+        continuation_frames="39",
     )
     assert cfg.rolling_frames == 39
     assert cfg.rolling_latent_frames == 12

@@ -39,8 +39,8 @@ Target empty AV latent ───────────────┼──►
 
 | Node Name | Category | Description |
 | :--- | :--- | :--- |
-| **`MiniMax Prefix Cache Config`** | `MiniMaxH3/PrefixStream` | Selects `Native Masked AV` (default) or `Safe Native` (fallback) and the protected AV context length. Legacy cache precision/device widgets remain for workflow compatibility. |
-| **`MiniMax Prefix Cache Applier`** | `MiniMaxH3/PrefixStream` | Builds the native video/audio masks and outputs `masked_latent`, or applies collision-safe keyframe conditioning in fallback mode. |
+| **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | Selects `Native Masked AV` (default) or `Safe Native` (fallback), plus a user-visible video context length. |
+| **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | Builds the native video/audio masks and outputs `masked_latent`, or applies collision-safe keyframe conditioning in fallback mode. |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, guaranteeing zero VAE causal flicker and perfect sync. |
 | **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly joins video in pixel space (with luminance gain matching) and audio waveforms (equal-power crossfade). |
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to save joint AV latents to safetensors without external dependencies. |

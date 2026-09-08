@@ -1,7 +1,7 @@
 """ComfyUI custom nodes for MiniMax H3 masked AV continuation and chaining.
 
 Exposes:
-- MiniMaxPrefixCacheConfig: Configure FP8/BF16, GPU/CPU Pinned, Anchor & Rolling parameters in real video frames.
+- MiniMaxPrefixCacheConfig: Select continuation mode and a visible-video context length.
 - MiniMaxPrefixCacheApplier: Builds native AV masks or Safe Native fallback conditioning.
 - MiniMaxTrimPrefixLatent: Automatically trims leading overlap frames from generated clips (AV unified).
 - MiniMaxLongVideoStitcher: Smoothly stitches video and audio latents between clips in unified LATENT space.
@@ -114,32 +114,24 @@ any_type = AnyType("*")
 
 
 class MiniMaxPrefixCacheConfigNode:
-    """Configures Prefix KV Cache precision, memory strategy, and window sizes in real video frames."""
+    """Configures the user-facing continuation mode and video context length."""
 
     @classmethod
     def INPUT_TYPES(cls):
 
         return {
             "required": {
-                "cache_dtype": (["fp8", "bf16", "fp16"], {"default": "fp8"}),
-                "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
-                "use_anchor": ("BOOLEAN", {"default": False, "tooltip": "是否额外保留第一段的首帧锚点。多片段连续接力建议 False，由 rolling head 平滑过渡"}),
-                "anchor_frames": ("INT", {"default": 5, "min": 1, "max": 31, "step": 1, "tooltip": "首尾锚点保护实际视频帧数"}),
-                "rolling_frames": (["39", "90", "141", "192"], {
-                    "default": "39",
-                    "tooltip": "Native Masked AV 保护的视频上下文帧数。推荐 39 帧；较长选项会自动下取整到 39/90/141/192... 的精确音视频公共边界。"
-                }),
                 "cache_mode": ([
                     "Native Masked AV (Recommended)",
                     "Safe Native (Fallback)"
                 ], {
                     "default": "Native Masked AV (Recommended)",
-                    "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 保留关键帧条件续写作为兼容备选。"
+                    "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 是短片段或旧工作流的兼容备选。"
                 }),
-            },
-            "optional": {
-                "anchor_latent_frames": ("INT", {"default": 2, "min": 1, "max": 16, "step": 1}),
-                "rolling_latent_frames": ("INT", {"default": 7, "min": 1, "max": 64, "step": 1}),
+                "continuation_frames": (["39", "90", "141", "192"], {
+                    "default": "39",
+                    "tooltip": "用户可见的视频续写上下文帧数。39 帧约 1.625 秒；较长选项会自动下取整到精确音视频公共边界。"
+                }),
             }
         }
 
@@ -150,54 +142,19 @@ class MiniMaxPrefixCacheConfigNode:
 
     def create_config(
         self,
-        cache_dtype: str = "fp8",
-        device_mode: str = "auto",
-        use_anchor: bool = False,
-        anchor_frames: int = 5,
-        rolling_frames: Any = "39",
         cache_mode: str = "Native Masked AV (Recommended)",
-        anchor_latent_frames: Optional[int] = None,
-        rolling_latent_frames: Optional[int] = None,
+        continuation_frames: Any = "39",
         **kwargs
     ) -> Tuple[KVCacheConfig]:
-        # Seamless dual-order compatibility:
-        # If cache_dtype was passed with a cache_mode string, adapt dynamically
-        if str(cache_dtype).startswith(("Native Masked AV", "Safe Native")):
-            actual_cache_mode = cache_dtype
-            actual_cache_dtype = device_mode
-            actual_device_mode = str(use_anchor)
-            actual_rolling = rolling_frames
-            actual_use_anchor = bool(anchor_frames) if isinstance(anchor_frames, bool) else False
-            actual_anchor_frames = 5
-        else:
-            actual_cache_mode = cache_mode
-            actual_cache_dtype = cache_dtype
-            actual_device_mode = device_mode
-            actual_use_anchor = bool(use_anchor)
-            actual_anchor_frames = anchor_frames
-            actual_rolling = rolling_frames
-
+        # Accept a saved legacy rolling_frames value if an old workflow sends it.
+        actual_rolling = kwargs.get("rolling_frames", continuation_frames)
         try:
             r_frames = int(actual_rolling)
         except (ValueError, TypeError):
             r_frames = 39
 
-        if rolling_latent_frames is not None:
-            r_frames = latent_steps_to_pixel_frames(rolling_latent_frames)
-        elif "rolling_latent_frames" in kwargs:
-            r_frames = latent_steps_to_pixel_frames(kwargs["rolling_latent_frames"])
-
-        if anchor_latent_frames is not None:
-            actual_anchor_frames = latent_steps_to_pixel_frames(anchor_latent_frames)
-        elif "anchor_latent_frames" in kwargs:
-            actual_anchor_frames = latent_steps_to_pixel_frames(kwargs["anchor_latent_frames"])
-
         config = KVCacheConfig(
-            cache_mode=actual_cache_mode,
-            cache_dtype=actual_cache_dtype,
-            device_mode=actual_device_mode,
-            use_anchor=actual_use_anchor,
-            anchor_frames=actual_anchor_frames,
+            cache_mode=cache_mode,
             rolling_frames=r_frames
         )
         return (config,)
@@ -1160,8 +1117,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxPrefixCacheConfig": "MiniMax H3 Prefix Cache Config",
-    "MiniMaxPrefixCacheApplier": "MiniMax H3 Prefix Cache Applier",
+    "MiniMaxPrefixCacheConfig": "MiniMax H3 Continuation Config",
+    "MiniMaxPrefixCacheApplier": "MiniMax H3 Continuation Applier",
     "MiniMaxTrimPrefix": "MiniMax H3 Trim Prefix (AV Master, Zero Flicker)",
     "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (AV Master)",
     "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
