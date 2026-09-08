@@ -252,11 +252,51 @@ def test_auto_initial_and_chaining_unified_workflow():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_safe_vae_decoders():
+    class DummyVAE:
+        def decode(self, samples):
+            return torch.zeros((10, 64, 64, 3))
+
+    safe_video_decoder = nodes.MiniMaxSafeVAEDecodeNode()
+    safe_audio_decoder = nodes.MiniMaxSafeVAEDecodeAudioNode()
+    vae = DummyVAE()
+
+    # 1. Initial Generation Mode: samples is None -> Should gracefully return empty/None without crashing
+    out_v_none = safe_video_decoder.decode(vae=vae, samples=None)
+    assert isinstance(out_v_none, tuple)
+    assert out_v_none[0].shape[0] == 0
+
+    out_a_none = safe_audio_decoder.decode(vae=vae, samples=None)
+    assert isinstance(out_a_none, tuple)
+    assert out_a_none[0] is None
+
+    # 2. Chaining Mode: samples is a valid joint AV latent -> Should decode properly
+    v = torch.randn(1, 16, 4, 16, 16)
+    a = torch.randn(1, 16, 2, 16)
+    latent = nodes.pack_av_latent(v, a)
+
+    out_v = safe_video_decoder.decode(vae=vae, samples=latent)
+    assert out_v[0].shape[0] == 10
+
+    # Audio decode
+    class DummyAudioVAE:
+        def decode(self, samples):
+            return {"waveform": torch.zeros((1, 2, 16000)), "sample_rate": 32000}
+
+    out_a = safe_audio_decoder.decode(vae=DummyAudioVAE(), samples=latent)
+    assert out_a[0] is not None
+    assert "waveform" in out_a[0]
+
+    print("test_safe_vae_decoders passed!")
+
+
 if __name__ == "__main__":
     test_clip_bin_saver_and_picker_with_images()
     test_clip_bin_saver_without_images_fallback()
     test_rating_filter()
     test_index_auto_rebuild()
     test_auto_initial_and_chaining_unified_workflow()
+    test_safe_vae_decoders()
     print("\n>>> All MiniMax Clip Bin tests PASSED successfully! <<<")
+
 

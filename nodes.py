@@ -1127,6 +1127,94 @@ class MiniMaxClipBinPickerNode:
         }
 
 
+class MiniMaxSafeVAEDecodeNode:
+    """Safe VAE Video Decoder that gracefully handles None in Initial Clip Mode.
+    
+    When samples is None (e.g. initial generation with zero prior context),
+    it safely returns an empty IMAGE tensor instead of crashing with TypeError.
+    When samples is present, it delegates to vae.decode() with full fidelity.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "vae": ("VAE",),
+            },
+            "optional": {
+                "samples": ("LATENT",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "decode"
+    CATEGORY = "MiniMaxH3/ClipBin"
+
+    def decode(self, vae: Any, samples: Optional[Dict[str, Any]] = None) -> Tuple[torch.Tensor]:
+        if samples is None:
+            logger.info("[Safe VAE Decode] No previous video latent provided (Initial Clip Mode). Passing through empty.")
+            return (torch.empty((0, 768, 1344, 3), dtype=torch.float32),)
+
+        v, _ = _unpack_latent(samples)
+        if v is None:
+            raw_s = samples.get("samples")
+            if raw_s is None:
+                return (torch.empty((0, 768, 1344, 3), dtype=torch.float32),)
+            v = raw_s
+
+        try:
+            images = vae.decode(v)
+            return (images,)
+        except Exception as e:
+            logger.warning("[Safe VAE Decode] Failed to decode samples (%s), returning empty: %s", v.shape, e)
+            return (torch.empty((0, 768, 1344, 3), dtype=torch.float32),)
+
+
+class MiniMaxSafeVAEDecodeAudioNode:
+    """Safe VAE Audio Decoder that gracefully handles None in Initial Clip Mode.
+    
+    When samples is None (e.g. initial generation with zero prior context),
+    it safely returns an empty AUDIO dict instead of crashing with TypeError.
+    When samples is present, it delegates to vae.decode() with full audio fidelity.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "vae": ("VAE",),
+            },
+            "optional": {
+                "samples": ("LATENT",),
+            }
+        }
+
+    RETURN_TYPES = ("AUDIO",)
+    FUNCTION = "decode"
+    CATEGORY = "MiniMaxH3/ClipBin"
+
+    def decode(self, vae: Any, samples: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Dict[str, Any]]]:
+        if samples is None:
+            logger.info("[Safe VAE Decode Audio] No previous audio latent provided (Initial Clip Mode). Passing through None.")
+            return (None,)
+
+        _, a = _unpack_latent(samples)
+        if a is None:
+            # Check if samples itself is an audio latent or dictionary
+            raw_s = samples.get("samples")
+            if raw_s is not None and hasattr(raw_s, "ndim") and raw_s.ndim <= 4:
+                a = raw_s
+            else:
+                logger.info("[Safe VAE Decode Audio] No audio stream found in latent. Passing through None.")
+                return (None,)
+
+        try:
+            audio = vae.decode(a)
+            return (audio,)
+        except Exception as e:
+            logger.warning("[Safe VAE Decode Audio] Failed to decode audio (%s), returning None: %s", getattr(a, 'shape', None), e)
+            return (None,)
+
 
 NODE_CLASS_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
@@ -1139,6 +1227,8 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxLoadLatent": MiniMaxLoadLatentNode,
     "MiniMaxClipBinSaver": MiniMaxClipBinSaverNode,
     "MiniMaxClipBinPicker": MiniMaxClipBinPickerNode,
+    "MiniMaxSafeVAEDecode": MiniMaxSafeVAEDecodeNode,
+    "MiniMaxSafeVAEDecodeAudio": MiniMaxSafeVAEDecodeAudioNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1152,5 +1242,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxLoadLatent": "MiniMax H3 Load AV Latent (Standalone)",
     "MiniMaxClipBinSaver": "MiniMax H3 Clip Bin Saver (Media Pool)",
     "MiniMaxClipBinPicker": "MiniMax H3 Clip Bin Picker (Gallery Loader)",
+    "MiniMaxSafeVAEDecode": "MiniMax H3 Safe VAE Decode (Video)",
+    "MiniMaxSafeVAEDecodeAudio": "MiniMax H3 Safe VAE Decode (Audio)",
 }
+
 

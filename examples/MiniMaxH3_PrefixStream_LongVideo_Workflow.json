@@ -5327,7 +5327,7 @@
     },
     {
       "id": 372,
-      "type": "VAEDecode",
+      "type": "MiniMaxSafeVAEDecode",
       "pos": [
         12130,
         3450
@@ -5364,15 +5364,15 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAEDecode"
+        "Node name for S&R": "MiniMaxSafeVAEDecode"
       },
-      "title": "VAEDecode (Video - Previous Clip)",
+      "title": "MiniMax H3 Safe VAE Decode (Video - Previous Clip)",
       "color": "#232",
       "bgcolor": "#353"
     },
     {
       "id": 375,
-      "type": "VAEDecodeAudio",
+      "type": "MiniMaxSafeVAEDecodeAudio",
       "pos": [
         12130,
         3550
@@ -5409,9 +5409,9 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAEDecodeAudio"
+        "Node name for S&R": "MiniMaxSafeVAEDecodeAudio"
       },
-      "title": "VAEDecodeAudio (Audio - Previous Clip)",
+      "title": "MiniMax H3 Safe VAE Decode (Audio - Previous Clip)",
       "color": "#232",
       "bgcolor": "#353"
     },
