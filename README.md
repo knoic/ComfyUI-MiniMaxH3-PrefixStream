@@ -21,6 +21,22 @@ The default **Native Masked AV** path follows [Herrgott's H3 Infinite Continuati
 
 ---
 
+## At a Glance
+
+### Choose the continuation path in one node
+
+`MiniMax H3 Continuation Config` keeps the main choice deliberately small: use **Native Masked AV (Recommended)** for normal continuation, and switch to **Safe Native** only when a workflow needs the compatibility fallback. `continuation_frames` selects the protected overlap length on the H3 frame grid.
+
+![MiniMax H3 Continuation Config](assets/readme/continuation-config.png)
+
+### Browse and resume from the Clip Bin
+
+`MiniMax H3 Clip Bin Picker` presents saved clips as a visual gallery. Pick a prior shot, filter by rating, and use its latent and tail frame as the next continuation context—without hunting through output folders.
+
+![MiniMax H3 Clip Bin Picker gallery](assets/readme/clip-bin-picker-gallery.png)
+
+---
+
 ## Architecture Overview
 
 ```text
@@ -45,6 +61,8 @@ Target empty AV latent ───────────────┼──►
 | **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly joins video in pixel space (with luminance gain matching) and audio waveforms (equal-power crossfade). |
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to save joint AV latents to safetensors without external dependencies. |
 | **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to load joint AV latents with metadata for multi-clip continuous streaming. |
+| **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | Archives a generated clip with a preview, rating, shot tag, prompt, and continuation lineage. |
+| **`MiniMax H3 Clip Bin Picker`** | `MiniMaxH3/PrefixStream` | Gallery-based loader for finding a saved clip and exposing its latent, tail frame, prompt, and ID. |
 | **`MiniMax Cache Telemetry Monitor`**| `MiniMaxH3/PrefixStream` | Reports the active continuation mode, protected context geometry, and session progress. |
 
 ---
