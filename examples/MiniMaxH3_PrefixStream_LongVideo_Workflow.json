@@ -4104,7 +4104,10 @@
           "label": "文件名",
           "localized_name": "Filenames",
           "name": "Filenames",
-          "type": "VHS_FILENAMES"
+          "type": "VHS_FILENAMES",
+          "links": [
+            549
+          ]
         }
       ],
       "properties": {
@@ -4372,7 +4375,8 @@
           "name": "STRING",
           "type": "STRING",
           "links": [
-            105
+            105,
+            547
           ]
         }
       ],
@@ -5106,7 +5110,9 @@
         {
           "name": "clip_id",
           "type": "STRING",
-          "links": [],
+          "links": [
+            548
+          ],
           "slot_index": 4
         }
       ],
@@ -5176,7 +5182,8 @@
           "name": "trimmed_images",
           "type": "IMAGE",
           "links": [
-            542
+            542,
+            546
           ],
           "slot_index": 0
         },
@@ -5219,7 +5226,7 @@
       ],
       "size": [
         360,
-        140
+        220
       ],
       "flags": {},
       "order": 24,
@@ -5257,7 +5264,7 @@
         {
           "name": "images",
           "type": "IMAGE",
-          "link": null
+          "link": 546
         },
         {
           "name": "prompt",
@@ -5265,7 +5272,7 @@
           "widget": {
             "name": "prompt"
           },
-          "link": null
+          "link": 547
         },
         {
           "name": "parent_clip_id",
@@ -5273,7 +5280,7 @@
           "widget": {
             "name": "parent_clip_id"
           },
-          "link": null
+          "link": 548
         },
         {
           "name": "video_file_name",
@@ -5281,7 +5288,7 @@
           "widget": {
             "name": "video_file_name"
           },
-          "link": null
+          "link": 549
         }
       ],
       "outputs": [
@@ -6314,6 +6321,38 @@
       376,
       0,
       "LATENT"
+    ],
+    [
+      546,
+      370,
+      0,
+      376,
+      4,
+      "IMAGE"
+    ],
+    [
+      547,
+      92,
+      0,
+      376,
+      5,
+      "STRING"
+    ],
+    [
+      548,
+      368,
+      4,
+      376,
+      6,
+      "STRING"
+    ],
+    [
+      549,
+      105,
+      0,
+      376,
+      7,
+      "VHS_FILENAMES"
     ]
   ],
   "groups": [

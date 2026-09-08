@@ -896,25 +896,25 @@ class MiniMaxClipBinSaverNode:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "latent": ("LATENT", {"tooltip": "采样器输出的原生联合音画 Latent (支持 NestedTensor)"}),
+                "latent": ("LATENT", {"tooltip": "【核心音画潜空间】采样器输出的原生联合音画 Latent (支持 MiniMax H3 官方 NestedTensor，包含完整视频与音频潜空间)"}),
                 "project_name": ("STRING", {
                     "default": "Default_Project",
-                    "tooltip": "素材箱项目名称（不同故事/场景独立归档管理）"
+                    "tooltip": "【项目/分镜箱名称】指定当前镜头归档的项目库（例如：科幻短片、广告场景1）。不同项目之间素材完全隔离，方便多故事独立管理"
                 }),
                 "shot_tag": ("STRING", {
                     "default": "Auto (自动编号)",
-                    "tooltip": "镜头名称或动作标签（填 'Auto (自动编号)' 将自动递增为 Shot 1, Shot 2...）"
+                    "tooltip": "【镜头标签/备注】镜头的编号或简要动作描述（如：'Shot 1'、'男主回眸'、'远景空镜'）。填 'Auto (自动编号)' 时系统将根据项目内已有镜头数量自动顺延递增为 Shot 1, Shot 2..."
                 }),
                 "rating": ("INT", {
                     "default": 4, "min": 1, "max": 5, "step": 1,
-                    "tooltip": "镜头星标打分（1~5星），方便事后一键过滤废案"
+                    "tooltip": "【镜头星标打分】1~5 星质量评级。后续使用 Clip Bin Picker 加载接力时，可按星级一键过滤掉废案镜头，只接力高分镜头"
                 }),
             },
             "optional": {
-                "images": ("IMAGE", {"tooltip": "VAE Decode 解码的视频帧。连接后自动截取首帧与最后一帧生成高清缩略图！"}),
-                "prompt": ("STRING", {"default": "", "tooltip": "本镜头的正向提示词（便于回溯与承接）"}),
-                "parent_clip_id": ("STRING", {"default": "", "tooltip": "父镜头 ID（记录分支血缘）"}),
-                "video_file_name": ("STRING", {"default": "", "tooltip": "关联的 MP4 视频文件名（建立 1:1 双向索引）"}),
+                "images": ("IMAGE", {"tooltip": "【渲染像素画面】连接当前片段解码后的画面 (来自 VAEDecode 或 TrimPrefix)。连接后系统将自动截取真实的首帧与尾帧，生成超高清并排缩略图卡片！"}),
+                "prompt": ("STRING", {"default": "", "tooltip": "【本段正向提示词】连接输入文本 (Input Text/Prompt)。自动入库保存到 meta.json，以便后续回顾镜头剧情与接力参考"}),
+                "parent_clip_id": ("STRING", {"default": "", "tooltip": "【父镜头血缘ID】连接上一段 Clip Bin Picker 输出的 clip_id。用于在元数据中清晰记录多版本分支历史与承接血缘"}),
+                "video_file_name": ("STRING", {"default": "", "tooltip": "【关联合成视频名】连接当前片段合成保存节点 (VHS_VideoCombine) 的 Filenames 输出，或手动输入关联的 MP4 文件名，建立视频与潜空间的 1:1 双向索引"}),
             }
         }
 
@@ -933,7 +933,7 @@ class MiniMaxClipBinSaverNode:
         images: Optional[torch.Tensor] = None,
         prompt: str = "",
         parent_clip_id: str = "",
-        video_file_name: str = "",
+        video_file_name: Any = "",
         **kwargs
     ) -> Dict[str, Any]:
         if latent is None:
@@ -948,16 +948,32 @@ class MiniMaxClipBinSaverNode:
             idx = load_project_index(project_name)
             actual_shot = f"Shot {len(idx.get('clips', [])) + 1}"
 
+        # Handle video_file_name if passed as list/tuple from VHS_VideoCombine Filenames
+        resolved_video_name = ""
+        def _extract_filename(val: Any) -> str:
+            if isinstance(val, (list, tuple)):
+                if not val:
+                    return ""
+                # Recursively inspect the last element (VHS format: [bool_or_subfolder, [paths...]])
+                return _extract_filename(val[-1])
+            return str(val).strip()
+
+        if video_file_name is not None:
+            resolved_video_name = _extract_filename(video_file_name)
+            # If it's a full path, keep basename for friendly display
+            if resolved_video_name:
+                resolved_video_name = os.path.basename(resolved_video_name)
+
         meta_obj, clip_dir, preview_pil = save_clip_asset(
             video_tensor=video,
             audio_tensor=audio,
             images=images,
             project_name=project_name,
             shot_tag=actual_shot,
-            prompt=prompt,
+            prompt=prompt if isinstance(prompt, str) else str(prompt),
             rating=rating,
-            parent_clip_id=parent_clip_id,
-            associated_video_path=video_file_name,
+            parent_clip_id=parent_clip_id if isinstance(parent_clip_id, str) else str(parent_clip_id),
+            associated_video_path=resolved_video_name,
         )
 
         preview_tensor = pil_to_tensor(preview_pil)
@@ -975,8 +991,8 @@ class MiniMaxClipBinSaverNode:
             "type": "output"
         }]
 
-        logger.info("[Clip Bin Saver] Stored clip '%s' in '%s' (%s frames | ⭐%s | tag: %s)",
-                    meta_obj.clip_id, project_name, meta_obj.frames, meta_obj.rating, actual_shot)
+        logger.info("[Clip Bin Saver] Stored clip '%s' in '%s' (%s frames | ⭐%s | tag: %s | video: '%s')",
+                    meta_obj.clip_id, project_name, meta_obj.frames, meta_obj.rating, actual_shot, resolved_video_name)
 
         return {
             "ui": {"images": ui_images},
@@ -995,7 +1011,7 @@ class MiniMaxClipBinPickerNode:
             "required": {
                 "project_name": ("STRING", {
                     "default": default_proj,
-                    "tooltip": "素材箱项目名称。可填已有项目名，或通过控制台查看可用项目。"
+                    "tooltip": "【选择项目库】要读取素材的项目文件夹名称（如 Default_Project）。可在 ComfyUI 运行控制台查看已存在的项目名称列表"
                 }),
                 "mode": ([
                     "Auto (首段全新 / 后续自动接力)",
@@ -1003,7 +1019,7 @@ class MiniMaxClipBinPickerNode:
                     "Strict Chaining (必须接力指定或最新镜头)"
                 ], {
                     "default": "Auto (首段全新 / 后续自动接力)",
-                    "tooltip": "工作模式：'Auto' 最省心，首次运行自动开辟首段，后续自动接力上一段；'Force Initial' 强制全新生成；'Strict Chaining' 强校验接力。"
+                    "tooltip": "【运行工作模式】\n• Auto（强烈推荐）：若项目库为空自动作为首段全新生成；后续运行时全自动接续上一段，无需任何拔线或手动操作！\n• Force Initial：强制开辟首段，忽略库内所有历史素材。\n• Strict Chaining：严格接力模式，库内无镜头时直接报错提示"
                 }),
                 "filter_rating": ([
                     "All (1-5 ⭐)",
@@ -1012,17 +1028,17 @@ class MiniMaxClipBinPickerNode:
                     "⭐⭐⭐⭐⭐ (5 ⭐)"
                 ], {
                     "default": "All (1-5 ⭐)",
-                    "tooltip": "星级过滤器：只加载或选用大于等于该星级的优质镜头。"
+                    "tooltip": "【星级过滤器】只读取大于等于该评级的镜头（如过滤掉 1~3 星的测试废案，只接续 4 星或 5 星的满意镜头）"
                 }),
                 "clip_selection": ("STRING", {
                     "default": "latest",
-                    "tooltip": "镜头选择：输入 'latest' (或留空) 自动加载本工程最新符合条件的优质镜头；也可输入具体的 clip_id (如 clip_2026...)。"
+                    "tooltip": "【镜头定位】\n• 填 'latest'（默认）：自动调取最新生成的优质镜头进行无缝接续\n• 填 clip_id（如 clip_20260908...）：精确跳转或回溯到指定的历史镜头开启新分支\n• 填 shot 名称：按镜头标签名称匹配"
                 }),
             },
             "optional": {
                 "custom_clip_path": ("STRING", {
                     "default": "",
-                    "tooltip": "可选绝对路径覆盖。"
+                    "tooltip": "【自定义物理路径覆盖】可选高级选项。填入绝对路径可直接载入任意磁盘目录下的 Clip Bin 镜头文件夹"
                 }),
             }
         }
@@ -1031,6 +1047,7 @@ class MiniMaxClipBinPickerNode:
     RETURN_NAMES = ("latent", "tail_frame", "first_frame", "prompt", "clip_id")
     FUNCTION = "pick_clip"
     CATEGORY = "MiniMaxH3/ClipBin"
+
 
     def pick_clip(
         self,

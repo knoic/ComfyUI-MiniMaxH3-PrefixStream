@@ -2,6 +2,7 @@
 
 import os
 import sys
+import json
 import shutil
 import tempfile
 import types
@@ -290,6 +291,39 @@ def test_safe_vae_decoders():
     print("test_safe_vae_decoders passed!")
 
 
+def test_clip_bin_saver_video_file_name_from_vhs():
+    temp_dir = setup_temp_folder_paths()
+    try:
+        v = torch.randn(1, 16, 4, 16, 16)
+        latent = nodes.pack_av_latent(v, None)
+
+        saver = nodes.MiniMaxClipBinSaverNode()
+        # VHS_VideoCombine outputs Filenames as ([subfolder, ["output/video_001.mp4"]],) or (["video_001.mp4"],)
+        vhs_filenames = (["my_subfolder", ["my_video_0001.mp4"]],)
+        res = saver.save_clip(
+            latent=latent,
+            project_name="VHSTest",
+            shot_tag="Shot 1",
+            rating=5,
+            prompt="A majestic lion",
+            video_file_name=vhs_filenames
+        )
+        clip_id = res["result"][0]
+        bin_dir = res["result"][2]
+
+        # Check meta.json
+        meta_json = os.path.join(bin_dir, "meta.json")
+        assert os.path.isfile(meta_json)
+        with open(meta_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert data.get("prompt") == "A majestic lion"
+        assert data.get("associated_video_path") == "my_video_0001.mp4"
+
+        print("test_clip_bin_saver_video_file_name_from_vhs passed!")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_clip_bin_saver_and_picker_with_images()
     test_clip_bin_saver_without_images_fallback()
@@ -297,6 +331,8 @@ if __name__ == "__main__":
     test_index_auto_rebuild()
     test_auto_initial_and_chaining_unified_workflow()
     test_safe_vae_decoders()
+    test_clip_bin_saver_video_file_name_from_vhs()
     print("\n>>> All MiniMax Clip Bin tests PASSED successfully! <<<")
+
 
 
