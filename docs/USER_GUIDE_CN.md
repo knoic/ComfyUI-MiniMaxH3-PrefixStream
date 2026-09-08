@@ -1,155 +1,177 @@
-# ComfyUI-MiniMaxH3-PrefixStream 使用说明指南
+# ComfyUI-MiniMaxH3-PrefixStream 中文使用指南
 
-本插件专为 **MiniMax H3** 长视频续写设计。默认采用 **Native Masked AV**：把上一段音视频 Latent 的规范尾部直接复制到新目标开头，并通过 ComfyUI 原生、彼此独立的 video/audio denoise mask 保护；`Safe Native` 保留为关键帧续写兼容方案。
+本插件用于将 MiniMax H3 的多段生成组织为稳定的长视频续写流程。每次生成后，片段可以归档到可视化 **Clip Bin** 素材箱；下一次从画廊选取任意历史镜头作为上下文，即可继续生成或创建新的分支。
+
+默认方案为 **Native Masked AV**：将上一段音视频 latent 的规范尾部复制到下一段的开头，并用 ComfyUI 原生视频/音频去噪遮罩分别保护。`Safe Native` 是短片段或不具备原生 AV-mask 支持时的兼容性备选。
 
 ---
 
-## 一、 快速安装
+## 一、安装与前提
 
-1. 打开终端，进入你的 ComfyUI 插件目录：
+1. 将本仓库放入 ComfyUI 的 `custom_nodes` 目录：
+
    ```bash
    cd ComfyUI/custom_nodes
-   ```
-2. 克隆本仓库：
-   ```bash
    git clone https://github.com/knoic/ComfyUI-MiniMaxH3-PrefixStream.git
+   cd ComfyUI-MiniMaxH3-PrefixStream
+   pip install -r requirements.txt
    ```
-3. 重启 ComfyUI。
-4. 启动后，在节点列表中搜索或右键找到分类：`MiniMaxH3/PrefixStream`。
+
+2. 使用包含 MiniMax H3 音视频遮罩支持的新版 ComfyUI。`Native Masked AV` 依赖 ComfyUI 的 H3 AV-mask 实现；若运行时提示缺少支持，请先更新 ComfyUI，再完全重启后端。
+3. 重启 ComfyUI，并在浏览器中按 `Ctrl + F5` 强制刷新前端。节点位于 `MiniMaxH3/PrefixStream` 和 `MiniMaxH3/ClipBin` 分类。
 
 ---
 
-## 二、 核心节点详解
+## 二、核心概念
 
-### 1. `MiniMax H3 Continuation Config`（续写配置节点）
-只提供创作者可见的视频续写参数：续写方案和上下文帧数。
+```text
+上一段完整 AV latent → 取规范尾部作为上下文
+                                  │
+新的 H3 目标 latent ───────────────┼→ Continuation Applier
+                                  │       │
+                                  │       ▼
+                                  │   原生 H3 采样
+                                  │       │
+                                  │       ▼
+                             解码 → Trim Prefix 裁切重叠开头 → 保存 / 合成
+```
 
-| 参数项 | 可选值 / 默认值 | 推荐配置与说明 |
+- **上下文**：上一段采样器输出的完整联合音视频 `LATENT`。MiniMax H3 的视频和音频封装在同一个粉色 latent 端口内，无需拆成两根线。
+- **目标**：新一段由原生 H3 工作流创建的目标 `LATENT`，通常来自 `MiniMaxH3ReferenceToVideo`。
+- **重叠开头**：为保证连续性，下一段开头会保留上一段的上下文。采样后用 `MiniMax H3 Trim Prefix` 裁掉这部分，再进行成片保存或外部合成。
+- **素材箱**：保存片段的 latent、预览图、镜头标签、评分、提示词和父镜头 ID。它是续写来源的可视化选择器，而非视频拼接器。
+
+---
+
+## 三、节点说明
+
+### 1. `MiniMax H3 Continuation Config`
+
+这是唯一需要为续写策略做选择的配置节点。
+
+| 参数 | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| **`cache_mode`** | `Native Masked AV (Recommended)`<br>`Safe Native (Fallback)`<br>*(默认 `Native Masked AV`)* | `Native Masked AV` 直接复制并原生保护上一段 AV Latent，不修改 DiT；视频和音频 mask 相互独立。`Safe Native` 使用原生 Attention 与关键帧条件续写，供旧工作流兼容。 |
-| **`continuation_frames`** | `39` / `90` / `141` / `192`<br>*(默认 `39`)* | 用户可见的视频续写上下文帧数。39 帧约 1.625 秒，对应 12 个视频 Latent step 与 65 个音频 Latent tick；上下文不能占满整个目标。 |
+| `cache_mode` | `Native Masked AV (Recommended)` | 默认方案。使用 ComfyUI 原生视频/音频遮罩保护复制到目标开头的上下文。`Safe Native (Fallback)` 用于兼容工作流或原生遮罩不可用的情形。 |
+| `continuation_frames` | `39` | 可选择 `39`、`90`、`141` 或 `192`。这是视频中可见的重叠上下文长度；39 帧约为 1.625 秒。 |
+
+推荐先使用默认的 `Native Masked AV + 39`。上下文越长，连续性参考越多，但目标片段必须有足够长度容纳它。
+
+### 2. `MiniMax H3 Continuation Applier`
+
+将它插入原生 H3 的模型、条件和采样 latent 链路中。
+
+| 插槽 | 连接方式 |
+| :--- | :--- |
+| `model` | 原生 H3 模型输出。 |
+| `conditioning` | 原生正向条件输出，例如 `MiniMaxH3ReferenceToVideo` 的正向条件。 |
+| `cache_config` | 连接 `MiniMax H3 Continuation Config`。 |
+| `context_latent` | 上一段完整的 H3 联合音视频 latent；首段生成时留空。可连接 Clip Bin Picker 的 `latent` 输出。 |
+| `target_latent` | 新一段原生 H3 目标 latent，通常来自 `MiniMaxH3ReferenceToVideo`。 |
+
+输出连接方式：
+
+- `model`、`conditioning`：分别接回原生采样链路。
+- `masked_latent`：接采样器的 `latent_image` 输入。
+- `session`：接 `MiniMax H3 Trim Prefix`；也可以接 `MiniMax H3 Cache Telemetry Monitor` 查看本次保护的实际上下文。
+
+首段没有 `context_latent` 时，节点会直接传递目标 latent，不创建保护前缀。若 Native Masked AV 的源片段或目标片段过短，节点会自动回退至 `Safe Native`，并在 ComfyUI 控制台记录原因。
+
+### 3. `MiniMax H3 Trim Prefix (AV Master, Zero Flicker)`
+
+续写片段采样完成后，用它移除重复的开头。推荐在**解码后的图像和音频波形空间**裁切，可避免再次 VAE 解码导致的画面闪烁或色彩偏差。
+
+| 输入 | 建议 |
+| :--- | :--- |
+| `images` | 连接当前片段完整解码后的画面。 |
+| `audio` | 连接当前片段完整解码后的音频。 |
+| `session` | 连接 Continuation Applier 的 `session` 输出；`trim_frames=0` 时自动使用本次实际保护帧数。 |
+| `trim_frames` | 保持 `0` 即可自动裁切；只有脱离会话单独使用时才手动填写。 |
+| `latent` | 可选。需要裁切 latent 时再连接；不要把它当作像素/音频裁切的替代品。 |
+
+输出 `trimmed_images` 和 `trimmed_audio` 用于保存或交给视频合成节点。`trimmed_latent` 仅在输入了 `latent` 时才有内容。
+
+### 4. `MiniMax H3 Clip Bin Saver (Media Pool)`
+
+将一段生成结果归档到项目素材箱，供之后视觉化挑选和接力。
+
+- 必填：`latent`、`project_name`、`shot_tag`、`rating`。
+- `shot_tag` 是自由文本标签，例如“雨夜登场”或“Take 2”；保留 `Auto (自动编号)` 会生成 `Shot 1`、`Shot 2` 等自动编号。
+- 建议连接 `images`，让素材箱生成首尾预览卡片。
+- 可选连接 `prompt`、`parent_clip_id` 与 `video_file_name`，记录提示词、续写血缘和导出视频名。
+
+要让下一段正常续写，请保存采样器输出的**完整**联合 AV latent；预览图则可以使用裁切后的 `trimmed_images`。
+
+### 5. `MiniMax H3 Clip Bin Picker (Gallery Loader)`
+
+以画廊方式浏览和载入素材箱中的片段。
+
+- `project_name`：选择项目素材箱。
+- `mode`：`Auto` 在素材箱为空时作为首段生成；有素材时自动接力。`Force Initial` 强制开始新首段；`Strict Chaining` 在没有可用来源时直接报错。
+- `filter_rating`：按星级过滤候选镜头。
+- `clip_selection`：使用 `latest` 自动选择最新片段，或填写 `clip_id` / `shot_tag` 来选择指定历史镜头。
+- 输出 `latent` 接 Continuation Applier 的 `context_latent`；`tail_frame`、`first_frame` 和 `prompt` 可作为下一段的参考或提示词素材；`clip_id` 接下一次 Clip Bin Saver 的 `parent_clip_id`。
+
+### 6. 其他辅助节点
+
+| 节点 | 用途 |
+| :--- | :--- |
+| `MiniMax H3 Cache Telemetry Monitor` | 读取 `session` 并输出当前模式、片段序号和实际保护帧数。 |
+| `MiniMax H3 Save AV Latent (Standalone)` | 将完整 H3 联合 AV latent 保存为 safetensors。 |
+| `MiniMax H3 Load AV Latent (Standalone)` | 从历史 safetensors 载入联合 AV latent。 |
+| `MiniMax H3 Safe VAE Decode (Video)` | 在首段模式下可安全处理空的上文 latent。 |
+| `MiniMax H3 Safe VAE Decode (Audio)` | 在首段模式下可安全处理空的上文 latent。 |
 
 ---
 
-### 2. `MiniMax H3 Continuation Applier`（续写应用节点）
-连接在模型、条件与采样 Latent 之间。默认模式会把上一段 AV Latent 的规范尾部复制到 `target_latent` 开头，创建独立 video/audio `noise_mask`，并清理与保护区冲突的开头关键帧。
+## 四、推荐工作流
 
-* **连接方式（关键插槽）**：
-  * `model`：连接自模型加载或调度器的输出端。
-  * `conditioning`：**必须连接自正面提示词条件输出（如 `MiniMaxH3ReferenceToVideo` 的 `positive`）**。
-  * `cache_config`：连接自 `MiniMax H3 Continuation Config`。
-  * `target_latent`：连接 `MiniMaxH3ReferenceToVideo` 输出的目标 `LATENT`。
-  * `context_latent`：连接上一段完整的 H3 音视频 Latent（支持 NestedTensor 自动解包）。
-* **输出**：
-  * `model`：原生模型，不安装 DiT Hook。
-  * `conditioning`：已移除保护区内冲突关键帧的条件，输入给采样器。
-  * `session`：当前长视频生成会话对象，用于传递给裁切节点、缝合节点或监视器。
-  * `masked_latent`：连接采样器的 `latent_image`；其中已包含原生音视频 denoise mask。
+### 首段生成
 
----
+1. 保持原有 MiniMax H3 模型、提示词、目标 latent、采样和解码节点。
+2. 将 `Continuation Config` 设为 `Native Masked AV (Recommended)` 和 `39`。
+3. `Continuation Applier` 的 `context_latent` 留空；将原生目标 latent 接到 `target_latent`，再将 `masked_latent` 接采样器。
+4. 采样完成后解码完整画面与音频；将它们以及 `session` 接到 `Trim Prefix`。首段没有重叠，裁切节点会保持内容不变。
+5. 将采样器完整 latent 与裁切后的预览画面接到 `Clip Bin Saver`，保存第一段。
 
-### 3. `MiniMax Trim Prefix Latent (Auto-Crop)`（自动剔除前缀重复帧节点 - 音视频统一）
-**【彻底告别手动剪映/PR裁剪】** 专用于一段一段导出独立 MP4 的场景。
-续写生成的视频开头必然包含前置过渡重叠帧。接入本节点后，节点将**在统一潜空间层面同时对画面 Latent 和音频 Latent 毫秒级无损裁切**：
-- **输入**：`latent`（采样器输出的原生 unified LATENT，内置 NestedTensor 视频+音频）、`session` 或 `cache_config`。
-- **输出**：`trimmed_latent`（纯净新切片统一 Latent，直接单线同时接入 `VAEDecode` 和 `VAEDecodeAudio`，0 帧重复回放，音画绝对对齐！）。
-- **附加优势**：直接在 Latent 上裁除，使得 VAE Decode 少解码 20%~30% 图像与音频，显著节省显存并加快解码。
+### 续写下一段或创建分支
+
+1. 在 `Clip Bin Picker` 中选择项目、评分筛选和要接力的镜头；使用 `latest` 可自动选择最新片段。
+2. 将 Picker 的 `latent` 接到 Applier 的 `context_latent`，将 `clip_id` 接到 Saver 的 `parent_clip_id`。
+3. 继续使用原生 H3 工作流产生新的 `target_latent`，并连接到 Applier 的 `target_latent`。
+4. 采样后按首段相同方式解码，再使用 Trim Prefix 依照 `session` 自动裁掉重叠开头。
+5. 归档新片段。之后可从任意历史片段再次接力，因此可以形成分支，而非只能线性续写。
+
+最终视频的合成可使用你现有的 ComfyUI 视频合成节点或剪辑软件；本插件负责为每一段输出已裁掉重叠开头且音画同步的内容。
 
 ---
 
-### 4. `MiniMax Long Video Stitcher`（无缝缝合与长视频合成节点 - 音画双轨 S 曲线）
-**【全自动长视频拼接】** 用于将 Clip 1 与 Clip 2 在潜空间直接合成连续超长视频的场景。
-- **输入**：`current_latent`、`previous_latent`、`session`、`cache_config`。
-- **输出**：
-  - `stitched_latent`：**统一无缝长视频 Latent**。自动将两段视频与音频的重合区在潜空间用平滑余弦 S 曲线混合消除硬缝，单线直接接 `VAEDecode` 与 `VAEDecodeAudio`，一键生成无缝超长大片！
-  - `trimmed_current_latent`：当前切片的纯净新内容 Latent（音画合一）。
+## 五、常见问题
+
+### 为什么配置节点只有两个选项？
+
+这是有意简化的界面。创作者只需决定续写方案与可见视频上下文长度；缓存 dtype、设备、锚帧等旧版实现细节不再暴露。
+
+### 为什么 `shot_tag` 是文本输入框？
+
+它是镜头的自由标签，供素材箱检索与分镜备注使用，而不是固定编号。无需手填时，保留 `Auto (自动编号)` 即可。
+
+### 为什么 Native Masked AV 报缺少支持？
+
+请更新 ComfyUI 至包含 MiniMax H3 AV-mask 支持的版本，完全重启后端并按 `Ctrl + F5` 刷新浏览器。短源片段或短目标片段则会自动使用 `Safe Native`。
+
+### 为什么不需要分别连接视频和音频 latent？
+
+MiniMax H3 在 ComfyUI 中使用联合 AV `LATENT` 封装视频和音频。续写应用节点会在内部拆分、处理并重新封装；用户只需连接一个 latent 端口。
+
+### 如何减少显存占用？
+
+从 `39` 帧上下文开始，按需要降低分辨率、目标时长或采样步数，并避免同时加载不使用的模型。
 
 ---
 
-### 5. `MiniMax Cache Telemetry Monitor`（遥测监视器）
-连接 `session`，输出当前续写模式、切片序号与实际裁切帧数，可在 ComfyUI 中接 `ShowText` 实时查看。
-
----
-
-### 6. `MiniMax Save AV Latent`（独立联合音画 Latent 保存节点）
-直接将采样器输出的 MiniMax H3 联合音画 Latent 以原生 safetensors 格式保存至输出目录，携带切片序号与帧数元数据，无需安装第三方续写扩展套件。
-
----
-
-### 7. `MiniMax Load AV Latent`（独立联合音画 Latent 加载节点）
-加载历史切片的联合音画 Latent，支持指定切片索引（如加载第 1 段用于为第 2 段提供 Rolling 上下文），或自动载入最新生成的切片文件。
-
----
-
-### 8. `MiniMax H3 Clip Bin Saver`（素材箱智能归档节点 - 告别文件盲盒）
-**【非线性剪辑素材库体系】** 针对“事后根本不知道哪一个 Latent 对应哪一个视频”设计的全新工程化媒体池归档节点：
-- **核心能力**：
-  - **自包含资产打包**：保存潜变量的同时，若连接了 `images`（来自 `VAEDecode`），自动截取**第 0 帧（角色锚点）**与**末尾交接帧**，生成高质首尾双联预览图 `preview.png` 与单帧卡片。在操作系统文件夹中直接大图可见！
-  - **星标与分镜打标**：支持设置 `rating`（⭐1~5 星打分）与 `shot_tag`（如“雨夜拔刀”、“Take 2”），方便事后批量过滤废案。
-  - **双向血缘与视频索引**：支持记录关联的 MP4 视频文件名 `video_file_name` 与父镜头 ID `parent_clip_id`，彻底告别错位。
-  - **UI 即时预览**：节点执行后，直接在 ComfyUI 画布节点面板上渲染出首尾双联预览大图！
-
----
-
-### 9. `MiniMax H3 Clip Bin Picker`（素材箱画廊选择器 - 零显存末帧即显）
-**【可视化镜头挑选与接力】** 彻底废除手动打字与翻找序号的传统方式：
-- **核心能力**：
-  - **多维筛选与工程管理**：支持按项目 `project_name` 分组管理，支持按星级快速过滤（如只看 `⭐⭐⭐⭐+ (4+ ⭐)`），一键屏蔽废片。
-  - **自动接力模式**：输入 `latest`（默认），自动选用本工程中最新符合星级标准的优质镜头，配合批处理队列实现全自动链式生成。
-  - **零显存末帧即显 (`tail_frame`)**：直接输出上一段视频的最后一帧图像（`IMAGE` 端口），并在节点表面即时展示！**创作者无需再次消耗显存调用 VAE 解码器**，即可一眼核对续写起点画面，并可直接把该图片拉给后续节点作参考图！
-
-
----
-
-## 三、 实战工作流指南
-
-### 场景一：首段正常生成
-首段没有历史上下文时，`target_latent` 会原样通过，不创建保护前缀；按普通 MiniMax H3 文生视频、图生视频或首尾帧流程采样即可。
-
-### 场景二：无限多段长视频连续续写（Infinite Video Chaining）
-适用于需要连续生成 10 秒、30 秒、1 分钟甚至更长故事视频的场景：
-1. **第 1 切片（生成 0~5.16 秒）**：
-   - 正常文生视频或图生视频。
-   - 保存输出的 unified Latent。
-2. **第 2 切片（续写 5~10 秒）**：
-   - 将第 1 切片完整 AV Latent 接入 `context_latent`。
-   - 将新一段空目标接入 `target_latent`，再把 `masked_latent` 接入采样器。
-   - 默认保护 39 帧视频上下文和与之对齐的音频；采样完成后裁掉重复头部。
-3. **第 3~N 切片**：
-   - 始终把上一切片的完整 AV Latent 传入 `context_latent`，滚动向前推进。
-
----
-
-## 四、 常见问题与避坑指南 (FAQ)
-
-### Q1: 为什么只显示视频帧数？
-* `continuation_frames` 是你在导出视频中看到的帧数；无需了解模型内部的 latent 时间步。
-* 更新插件后必须完全重启 ComfyUI 后端，并在浏览器中按 `Ctrl + F5` 强制刷新，才能加载精简后的节点界面。
-
-### Q2: 为什么画面和音频的 Latent 不用分开连线？
-* **MiniMax H3 的原生特性**：MiniMax H3 与传统单模态视频模型不同，它在生成时是音视频联合生成的，ComfyUI 官方将其打包为 `NestedTensor((video, audio))` 封装在同一个 `LATENT`（粉色端口）中。
-* **潜空间同步缝合/裁切**：本插件的 `TrimPrefixLatent` 与 `LongVideoStitcher` 原生识别并解包该结构，在 Latent 空间中同时按相同的时间比率无损裁切与余弦插值缝合，再原封不动打包为 unified LATENT。
-* **极简连线**：无需在缝合前将音频解码为波形，缝合节点输出的单个粉色 `stitched_latent` 端口直接分发连接给 `VAEDecode`（解码画面）与 `VAEDecodeAudio`（解码声音），音画自动严丝合缝、声画对齐！
-
-### Q3: 提示 `CUDA out of memory` (显存溢出) 怎么办？
-* 将 `continuation_frames` 调低到 `39`；这是推荐起点。
-* 降低目标视频分辨率、时长或采样步数，并关闭其他占用显存的模型与预览。
-
-### Q4: 两段拼接处画面出现微小的闪烁或接缝怎么优化？
-* MiniMax H3 原生包含轻微的随机噪声，将 `MiniMax Long Video Stitcher` 中的 `latent_blend_steps` 设置为 `2` 或 `3`，即可利用潜空间余弦插值消除光影跳跃。
-
-### Q5: Native Masked AV 为什么更稳定？
-* 上一段 AV Latent 被直接复制到目标开头，保护区 mask 为 0，因此无需让模型重新猜测这些历史内容。
-* 视频和音频分别保护，画面交接点与对白尾音可以采用不同长度；这是连续性方案，不宣称 KV 缓存加速。
-
----
-
-## 五、 致谢与参考项目 (Acknowledgments)
-
-本项目的诞生与时空续写设计深受以下开源项目与作者的启发，特此致以诚挚的感谢与敬意：
+## 六、致谢与参考项目
 
 1. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
-   - 感谢 NikoDemon80 在 MiniMax H3 关键帧锚定算法、VAE 时空周期相位网格对齐公式（Snap to Run Grid）、音视频头部裁切及 5/3 音视频时间缩放比例方面的先驱性数学探索与启发。
+   - 感谢其在 MiniMax H3 关键帧锚定、VAE 时空相位网格对齐、音视频开头裁切及时间缩放方面的探索与启发。
 2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@HerrgottMargott](https://github.com/HerrgottMargott)**
-   - 感谢 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
-
+   - 感谢其在 Native Masked AV、精确音视频上下文边界和独立音频保护方面提供的思路。
