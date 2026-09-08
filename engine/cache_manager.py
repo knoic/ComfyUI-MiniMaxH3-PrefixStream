@@ -53,7 +53,7 @@ def latent_steps_to_pixel_frames(latent_steps: int) -> int:
 @dataclass
 class KVCacheConfig:
     """Configuration for MiniMax H3 Prefix KV Cache."""
-    cache_mode: str = "Native Masked AV (v1.4, Recommended)"
+    cache_mode: str = "Native Masked AV (Recommended)"
     num_layers: int = 50
     num_heads: int = 56
     head_dim: int = 128
@@ -69,7 +69,7 @@ class KVCacheConfig:
     _anchor_latent_frames: Optional[int] = None
 
     def is_native_masked_av_mode(self) -> bool:
-        """Return True when v1.4 native per-stream denoise masks are selected."""
+        """Return True when native per-stream denoise masks are selected."""
         cm = str(self.cache_mode).lower()
         return "native masked" in cm or "masked av" in cm
 

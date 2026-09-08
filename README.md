@@ -6,7 +6,7 @@
 
 A native masked audiovisual continuation and streaming long-video suite for MiniMax H3 in ComfyUI.
 
-The default **Native Masked AV v1.4** path follows [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite): it copies the previous AV latent into the new target head and protects video and audio independently with ComfyUI's native denoise masks. `Safe Native` remains available as the keyframe-based fallback.
+The default **Native Masked AV** path follows [Herrgott's H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite): it copies the previous AV latent into the new target head and protects video and audio independently with ComfyUI's native denoise masks. `Safe Native` remains available as the keyframe-based fallback.
 
 ---
 
@@ -46,14 +46,6 @@ Target empty AV latent ───────────────┼──►
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to save joint AV latents to safetensors without external dependencies. |
 | **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Standalone node to load joint AV latents with metadata for multi-clip continuous streaming. |
 | **`MiniMax Cache Telemetry Monitor`**| `MiniMaxH3/PrefixStream` | Reports the active continuation mode, protected context geometry, and session progress. |
-
----
-
-## 100% Standalone & Independent Architecture
-
-- 🛡️ **Zero External Patching**: Does **NOT** patch ComfyUI files or monkey-patch H3 DiT blocks. Native Masked AV requires a current ComfyUI build containing MiniMax H3 AV-mask support from PR #15375.
-- 🚀 **Zero Third-Party Suite Dependencies**: Completely replaces third-party latent loaders/savers or speed patches (e.g. `TE-Speed-MiniMaxH3`, `Herrgotts-H3-Infinite-Continuation-Suite`, `ReservedVRAM`). Everything needed for long video streaming continuation is built natively into this repository.
-- 🔒 **Two Native Paths**: Native Masked AV is the recommended default; Safe Native is retained as a compatibility fallback.
 
 ---
 
@@ -103,7 +95,7 @@ python tests/test_native_masked_av.py
    - *Pioneering formulations for MiniMax H3 keyframe anchoring, VAE phase grid alignment, and audio-video temporal ratios.*
 
 2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@HerrgottMargott](https://github.com/HerrgottMargott)**
-   - 感谢 v1.4 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
+   - 感谢 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
    - *Native per-stream masked AV continuation, exact joint AV context geometry, and independent audio protection.*
 
 ---

@@ -4488,7 +4488,7 @@
         false,
         5,
         "39",
-        "Native Masked AV (v1.4, Recommended)"
+        "Native Masked AV (Recommended)"
       ],
       "widgets_values_named": {
         "cache_dtype": "fp8",
@@ -4496,7 +4496,7 @@
         "use_anchor": false,
         "anchor_frames": 5,
         "rolling_frames": "39",
-        "cache_mode": "Native Masked AV (v1.4, Recommended)"
+        "cache_mode": "Native Masked AV (Recommended)"
       },
       "title": "MiniMax H3 Prefix Cache Config (Real Video Frames)"
     },
@@ -4961,7 +4961,7 @@
           "input_ue_unconnectable": {}
         }
       },
-      "title": "MiniMax H3 Prefix Cache Applier (Native Masked AV v1.4)"
+      "title": "MiniMax H3 Prefix Cache Applier (Native Masked AV)"
     },
     {
       "id": 363,

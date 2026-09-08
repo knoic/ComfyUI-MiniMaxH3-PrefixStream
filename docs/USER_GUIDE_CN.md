@@ -1,6 +1,6 @@
 # ComfyUI-MiniMaxH3-PrefixStream 使用说明指南
 
-本插件专为 **MiniMax H3** 长视频续写设计。默认采用 v1.4 **Native Masked AV**：把上一段音视频 Latent 的规范尾部直接复制到新目标开头，并通过 ComfyUI 原生、彼此独立的 video/audio denoise mask 保护；`Safe Native` 保留为关键帧续写兼容方案。
+本插件专为 **MiniMax H3** 长视频续写设计。默认采用 **Native Masked AV**：把上一段音视频 Latent 的规范尾部直接复制到新目标开头，并通过 ComfyUI 原生、彼此独立的 video/audio denoise mask 保护；`Safe Native` 保留为关键帧续写兼容方案。
 
 ---
 
@@ -26,7 +26,7 @@
 
 | 参数项 | 可选值 / 默认值 | 推荐配置与说明 |
 | :--- | :--- | :--- |
-| **`cache_mode`** | `Native Masked AV (v1.4, Recommended)`<br>`Safe Native (Fallback)`<br>*(默认 `Native Masked AV`)* | `Native Masked AV` 直接复制并原生保护上一段 AV Latent，不修改 DiT；视频和音频 mask 相互独立。`Safe Native` 使用原生 Attention 与关键帧条件续写，供旧工作流兼容。 |
+| **`cache_mode`** | `Native Masked AV (Recommended)`<br>`Safe Native (Fallback)`<br>*(默认 `Native Masked AV`)* | `Native Masked AV` 直接复制并原生保护上一段 AV Latent，不修改 DiT；视频和音频 mask 相互独立。`Safe Native` 使用原生 Attention 与关键帧条件续写，供旧工作流兼容。 |
 | **`cache_dtype`** | `fp8` / `bf16` / `fp16` | 旧工作流序列化兼容字段；当前两种原生模式均不创建 KV Cache。 |
 | **`device_mode`** | `auto` / `gpu` / `cpu_pinned` | 旧工作流序列化兼容字段；Native Masked AV 使用目标 Latent 所在设备。 |
 | **`rolling_frames`** | `39` / `90` / `141` / `192`<br>*(默认 `39`)* | Native Masked AV 的精确音视频公共边界。39 帧约 1.625 秒，对应 12 个视频 Latent step 与 65 个音频 Latent tick；上下文不能占满整个目标。 |
@@ -158,5 +158,5 @@
 1. **[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)** by **[@NikoDemon80](https://github.com/NikoDemon80)**
    - 感谢 NikoDemon80 在 MiniMax H3 关键帧锚定算法、VAE 时空周期相位网格对齐公式（Snap to Run Grid）、音视频头部裁切及 5/3 音视频时间缩放比例方面的先驱性数学探索与启发。
 2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@HerrgottMargott](https://github.com/HerrgottMargott)**
-   - 感谢 v1.4 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
+   - 感谢 Native Masked AV 的原生分流遮罩、精确 AV 上下文边界及独立音频保护方案。
 

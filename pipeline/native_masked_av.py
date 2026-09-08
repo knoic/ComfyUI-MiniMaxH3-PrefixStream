@@ -1,6 +1,6 @@
 """Native MiniMax H3 video/audio masked-continuation helpers.
 
-The geometry follows Herrgott's H3 Infinite Continuation Suite v1.4: copied
+The geometry follows Herrgott's H3 Infinite Continuation Suite: copied
 video context must be a canonical H3 run whose duration is exact on both the
 24 fps video and 40 Hz audio latent timelines (39, 90, 141, ... frames).
 """

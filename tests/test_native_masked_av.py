@@ -1,4 +1,4 @@
-"""Tests for the v1.4 Native Masked AV continuation path."""
+"""Tests for the Native Masked AV continuation path."""
 
 import os
 import sys
@@ -93,6 +93,27 @@ class NativeMaskedAVTests(unittest.TestCase):
         self.assertIn("noise_mask", masked)
         self.assertEqual(len(out_cond[0][1]["minimax_keyframes"]), 1)
         self.assertEqual(out_cond[0][1]["minimax_keyframes"][0]["resolved_frame_index"], 123)
+
+    def test_applier_falls_back_for_a_short_target(self):
+        source = nodes.pack_av_latent(
+            torch.randn(1, 24, 2, 2, 2),
+            torch.randn(1, 32, 2, 8),
+        )
+        target = nodes.pack_av_latent(
+            torch.zeros(1, 24, 2, 2, 2),
+            torch.zeros(1, 32, 2, 8),
+        )
+        with mock.patch.object(nodes, "_require_native_masked_av_support", return_value=None):
+            model, _cond, session, out_latent = nodes.MiniMaxPrefixCacheApplierNode().apply_cache(
+                model=object(),
+                conditioning=[[torch.zeros(1), {}]],
+                cache_config=KVCacheConfig(),
+                context_latent=source,
+                target_latent=target,
+            )
+        self.assertIsNotNone(model)
+        self.assertIs(out_latent, target)
+        self.assertEqual(session.last_rolling_frames, 5)
 
 
 if __name__ == "__main__":

@@ -27,11 +27,11 @@ def test_config_node():
     cfg_node = nodes.MiniMaxPrefixCacheConfigNode()
     mode_choices = cfg_node.INPUT_TYPES()["required"]["cache_mode"][0]
     assert mode_choices == [
-        "Native Masked AV (v1.4, Recommended)",
+        "Native Masked AV (Recommended)",
         "Safe Native (Fallback)",
     ]
     (cfg,) = cfg_node.create_config(
-        cache_mode="Native Masked AV (v1.4, Recommended)",
+        cache_mode="Native Masked AV (Recommended)",
         cache_dtype="fp8",
         device_mode="auto",
         rolling_frames="39",

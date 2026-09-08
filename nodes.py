@@ -130,10 +130,10 @@ class MiniMaxPrefixCacheConfigNode:
                     "tooltip": "Native Masked AV 保护的视频上下文帧数。推荐 39 帧；较长选项会自动下取整到 39/90/141/192... 的精确音视频公共边界。"
                 }),
                 "cache_mode": ([
-                    "Native Masked AV (v1.4, Recommended)",
+                    "Native Masked AV (Recommended)",
                     "Safe Native (Fallback)"
                 ], {
-                    "default": "Native Masked AV (v1.4, Recommended)",
+                    "default": "Native Masked AV (Recommended)",
                     "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 保留关键帧条件续写作为兼容备选。"
                 }),
             },
@@ -155,7 +155,7 @@ class MiniMaxPrefixCacheConfigNode:
         use_anchor: bool = False,
         anchor_frames: int = 5,
         rolling_frames: Any = "39",
-        cache_mode: str = "Native Masked AV (v1.4, Recommended)",
+        cache_mode: str = "Native Masked AV (Recommended)",
         anchor_latent_frames: Optional[int] = None,
         rolling_latent_frames: Optional[int] = None,
         **kwargs
@@ -403,6 +403,23 @@ class MiniMaxPrefixCacheApplierNode:
         elif context_audio is not None and "waveform" in context_audio:
             a_ctx = context_audio["waveform"]
 
+        def safe_native_result(reason: Optional[Exception] = None):
+            """Run the compatibility path when a native AV mask cannot be built."""
+            if reason is not None:
+                logger.warning(
+                    "[Native Masked AV] %s Falling back to Safe Native for this clip; "
+                    "use a source and target of at least 39 frames to enable native masks.",
+                    reason,
+                )
+            patched_model, out_cond = sess.prepare_next_clip(
+                model_patcher=model,
+                conditioning=conditioning,
+                previous_video_latent=v_ctx,
+                previous_audio_latent=a_ctx,
+                anchor_video_latent=v_anc,
+            )
+            return (patched_model, out_cond, sess, target_latent)
+
         if cfg.is_native_masked_av_mode():
             if ctx_target is None:
                 logger.info("[Native Masked AV] Initial clip: target latent passes through without a protected prefix.")
@@ -417,16 +434,31 @@ class MiniMaxPrefixCacheApplierNode:
             target_video, target_audio = _unpack_latent(target_latent)
             if target_video is None or target_audio is None:
                 raise ValueError("Native Masked AV requires a target latent containing both video and audio streams")
-            _require_native_masked_av_support()
-            out_v, out_a, video_mask, audio_mask, plan = apply_native_masked_av(
-                target_video=target_video,
-                target_audio=target_audio,
-                source_video=v_ctx,
-                source_audio=a_ctx_from_latent,
-                context_frames=cfg.rolling_frames,
-                audio_tail_carryover=audio_tail_carryover,
-                audio_feather_ticks=audio_feather_ticks,
+            logger.info(
+                "[Native Masked AV] Source %d video steps/%d frames, target %d video steps/%d frames.",
+                v_ctx.shape[2], latent_steps_to_pixel_frames(v_ctx.shape[2]),
+                target_video.shape[2], latent_steps_to_pixel_frames(target_video.shape[2]),
             )
+            _require_native_masked_av_support()
+            try:
+                out_v, out_a, video_mask, audio_mask, plan = apply_native_masked_av(
+                    target_video=target_video,
+                    target_audio=target_audio,
+                    source_video=v_ctx,
+                    source_audio=a_ctx_from_latent,
+                    context_frames=cfg.rolling_frames,
+                    audio_tail_carryover=audio_tail_carryover,
+                    audio_feather_ticks=audio_feather_ticks,
+                )
+            except ValueError as exc:
+                geometry_errors = (
+                    "at least 39 source frames",
+                    "consume the whole target",
+                    "has no phase-aligned",
+                )
+                if any(text in str(exc) for text in geometry_errors):
+                    return safe_native_result(exc)
+                raise
             masked_latent = pack_av_latent(out_v, out_a, target_latent)
             masked_latent["noise_mask"] = _pack_nested_streams(video_mask, audio_mask)
             sess.last_rolling_steps = int(plan["context_steps"])
@@ -442,15 +474,7 @@ class MiniMaxPrefixCacheApplierNode:
             return (model, out_cond, sess, masked_latent)
 
         # Safe Native fallback: inject grid-aligned keyframe conditioning only.
-        patched_model, out_cond = sess.prepare_next_clip(
-            model_patcher=model,
-            conditioning=conditioning,
-            previous_video_latent=v_ctx,
-            previous_audio_latent=a_ctx,
-            anchor_video_latent=v_anc
-        )
-
-        return (patched_model, out_cond, sess, target_latent)
+        return safe_native_result()
 
 
 class MiniMaxTrimPrefixLatentNode:
