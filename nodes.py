@@ -103,8 +103,17 @@ class MiniMaxPrefixCacheConfigNode:
 
     @classmethod
     def INPUT_TYPES(cls):
+
         return {
             "required": {
+                "cache_dtype": (["fp8", "bf16", "fp16"], {"default": "fp8"}),
+                "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
+                "use_anchor": ("BOOLEAN", {"default": False, "tooltip": "是否额外保留第一段的首帧锚点。多片段连续接力建议 False，由 rolling head 平滑过渡"}),
+                "anchor_frames": ("INT", {"default": 5, "min": 1, "max": 31, "step": 1, "tooltip": "首尾锚点保护实际视频帧数"}),
+                "rolling_frames": (["22", "5", "39", "56", "73", "90", "107", "124"], {
+                    "default": "22",
+                    "tooltip": "滑动窗口实际视频帧数 (VAE 网格点)。推荐 22 帧 (~0.92s, 7 个 latent steps，严密对齐 cycle position 0)"
+                }),
                 "cache_mode": ([
                     "Safe Native (Zero Artifacts, Recommended)",
                     "Step-1 Dynamic Cache (Experimental Acceleration)",
@@ -113,16 +122,8 @@ class MiniMaxPrefixCacheConfigNode:
                     "default": "Safe Native (Zero Artifacts, Recommended)",
                     "tooltip": "模式选择: Safe Native 采用 100% 原生 ComfyUI Attention 运算；Step-1 Dynamic Cache 采用在线动态 KV 缓存；Decoupled Pure Prefix (Zero Overlap) 彻底解耦时间轴，前缀作为纯外部只读 KV 注入，新视频从 t=0 起跑，提示词动作完美对齐第 0 秒，免裁切零损耗。"
                 }),
-                "cache_dtype": (["fp8", "bf16", "fp16"], {"default": "fp8"}),
-                "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
-                "rolling_frames": (["22", "5", "39", "56", "73", "90", "107", "124"], {
-                    "default": "22",
-                    "tooltip": "滑动窗口实际视频帧数 (VAE 网格点)。推荐 22 帧 (~0.92s, 7 个 latent steps，严密对齐 cycle position 0)"
-                }),
             },
             "optional": {
-                "use_anchor": ("BOOLEAN", {"default": False, "tooltip": "是否额外保留第一段的首帧锚点。多片段连续接力建议 False，由 rolling head 平滑过渡"}),
-                "anchor_frames": ("INT", {"default": 5, "min": 1, "max": 31, "step": 1, "tooltip": "首尾锚点保护实际视频帧数"}),
                 "anchor_latent_frames": ("INT", {"default": 2, "min": 1, "max": 16, "step": 1}),
                 "rolling_latent_frames": ("INT", {"default": 7, "min": 1, "max": 64, "step": 1}),
             }
@@ -135,33 +136,37 @@ class MiniMaxPrefixCacheConfigNode:
 
     def create_config(
         self,
-        cache_mode: str = "Safe Native (Zero Artifacts, Recommended)",
         cache_dtype: str = "fp8",
         device_mode: str = "auto",
-        rolling_frames: Any = "22",
         use_anchor: bool = False,
         anchor_frames: int = 5,
+        rolling_frames: Any = "22",
+        cache_mode: str = "Safe Native (Zero Artifacts, Recommended)",
         anchor_latent_frames: Optional[int] = None,
         rolling_latent_frames: Optional[int] = None,
         **kwargs
     ) -> Tuple[KVCacheConfig]:
-        # Seamless backward compatibility for older saved workflow widget ordering:
-        # e.g. ['fp8', 'auto', True, ...] where cache_dtype was first
-        if cache_mode in ("fp8", "bf16", "fp16") and cache_dtype in ("auto", "gpu", "cpu_pinned"):
-            actual_cache_dtype = cache_mode
-            actual_device_mode = cache_dtype
-            actual_use_anchor = bool(rolling_frames) if isinstance(rolling_frames, bool) else use_anchor
-            actual_cache_mode = "Safe Native (Zero Artifacts, Recommended)"
-            r_frames = 22
+        # Seamless dual-order compatibility:
+        # If cache_dtype was passed with a cache_mode string, adapt dynamically
+        if str(cache_dtype).startswith(("Safe Native", "Step-1", "Decoupled")):
+            actual_cache_mode = cache_dtype
+            actual_cache_dtype = device_mode
+            actual_device_mode = str(use_anchor)
+            actual_rolling = rolling_frames
+            actual_use_anchor = bool(anchor_frames) if isinstance(anchor_frames, bool) else False
+            actual_anchor_frames = 5
         else:
             actual_cache_mode = cache_mode
             actual_cache_dtype = cache_dtype
             actual_device_mode = device_mode
-            actual_use_anchor = use_anchor
-            try:
-                r_frames = int(rolling_frames)
-            except (ValueError, TypeError):
-                r_frames = 22
+            actual_use_anchor = bool(use_anchor)
+            actual_anchor_frames = anchor_frames
+            actual_rolling = rolling_frames
+
+        try:
+            r_frames = int(actual_rolling)
+        except (ValueError, TypeError):
+            r_frames = 22
 
         if rolling_latent_frames is not None:
             r_frames = latent_steps_to_pixel_frames(rolling_latent_frames)
@@ -169,19 +174,20 @@ class MiniMaxPrefixCacheConfigNode:
             r_frames = latent_steps_to_pixel_frames(kwargs["rolling_latent_frames"])
 
         if anchor_latent_frames is not None:
-            anchor_frames = latent_steps_to_pixel_frames(anchor_latent_frames)
+            actual_anchor_frames = latent_steps_to_pixel_frames(anchor_latent_frames)
         elif "anchor_latent_frames" in kwargs:
-            anchor_frames = latent_steps_to_pixel_frames(kwargs["anchor_latent_frames"])
+            actual_anchor_frames = latent_steps_to_pixel_frames(kwargs["anchor_latent_frames"])
 
         config = KVCacheConfig(
             cache_mode=actual_cache_mode,
             cache_dtype=actual_cache_dtype,
             device_mode=actual_device_mode,
             use_anchor=actual_use_anchor,
-            anchor_frames=anchor_frames,
+            anchor_frames=actual_anchor_frames,
             rolling_frames=r_frames
         )
         return (config,)
+
 
 
 def _unpack_latent(latent_dict: Optional[Dict[str, Any]]) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:

@@ -4412,7 +4412,6 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "cache_dtype",
           "name": "cache_dtype",
           "type": "COMBO",
           "widget": {
@@ -4421,7 +4420,6 @@
           "link": null
         },
         {
-          "localized_name": "device_mode",
           "name": "device_mode",
           "type": "COMBO",
           "widget": {
@@ -4430,7 +4428,6 @@
           "link": null
         },
         {
-          "localized_name": "use_anchor",
           "name": "use_anchor",
           "type": "BOOLEAN",
           "widget": {
@@ -4439,7 +4436,6 @@
           "link": null
         },
         {
-          "localized_name": "anchor_frames",
           "name": "anchor_frames",
           "type": "INT",
           "widget": {
@@ -4448,11 +4444,18 @@
           "link": null
         },
         {
-          "localized_name": "rolling_frames",
           "name": "rolling_frames",
-          "type": "INT",
+          "type": "COMBO",
           "widget": {
             "name": "rolling_frames"
+          },
+          "link": null
+        },
+        {
+          "name": "cache_mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "cache_mode"
           },
           "link": null
         }
@@ -4483,16 +4486,18 @@
       "widgets_values": [
         "fp8",
         "auto",
-        true,
+        false,
         5,
-        22
+        "22",
+        "Safe Native (Zero Artifacts, Recommended)"
       ],
       "widgets_values_named": {
         "cache_dtype": "fp8",
         "device_mode": "auto",
-        "use_anchor": true,
+        "use_anchor": false,
         "anchor_frames": 5,
-        "rolling_frames": 22
+        "rolling_frames": "22",
+        "cache_mode": "Safe Native (Zero Artifacts, Recommended)"
       },
       "title": "MiniMax H3 Prefix Cache Config (Real Video Frames)"
     },
