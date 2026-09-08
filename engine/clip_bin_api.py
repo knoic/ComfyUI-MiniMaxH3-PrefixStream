@@ -51,10 +51,29 @@ def get_project_clips_api(project_name: str) -> Dict[str, Any]:
             )
         )
 
+        # Check existing video file
+        video_file = c.get("video_file", "")
+        if not video_file or not os.path.isfile(os.path.join(clip_dir, video_file)):
+            for v_cand in ["video.mp4", "video.webm"]:
+                if os.path.isfile(os.path.join(clip_dir, v_cand)):
+                    video_file = v_cand
+                    break
+            if not video_file and os.path.isdir(clip_dir):
+                for fn in os.listdir(clip_dir):
+                    if fn.lower().endswith((".mp4", ".webm", ".mov", ".mkv")):
+                        video_file = fn
+                        break
+
+        has_video = bool(video_file and os.path.isfile(os.path.join(clip_dir, video_file)))
+        video_url = f"/view?filename={video_file}&subfolder={subfolder}&type=output" if has_video else ""
+
         enriched = dict(c)
         enriched["thumbnail_file"] = preview_file
         enriched["subfolder"] = subfolder
         enriched["thumbnail_url"] = f"/view?filename={preview_file}&subfolder={subfolder}&type=output" if preview_file else ""
+        enriched["has_video"] = has_video
+        enriched["video_file"] = video_file if has_video else ""
+        enriched["video_url"] = video_url
         enriched_clips.append(enriched)
 
     return {

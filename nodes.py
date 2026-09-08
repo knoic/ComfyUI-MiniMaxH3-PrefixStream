@@ -777,9 +777,11 @@ class MiniMaxClipBinSaverNode:
             },
             "optional": {
                 "images": ("IMAGE", {"tooltip": "【渲染像素画面】连接当前片段解码后的画面 (来自 VAEDecode 或 TrimPrefix)。连接后系统将自动截取真实的首帧与尾帧，生成超高清并排缩略图卡片！"}),
+                "audio": ("AUDIO", {"tooltip": "【音频流】连接当前片段的音频 (来自 TrimPrefix 或 VAEDecodeAudio)。当自动编码保存 MP4 视频时，将作为音轨同步封装"}),
                 "prompt": ("STRING", {"default": "", "tooltip": "【本段正向提示词】连接输入文本 (Input Text/Prompt)。自动入库保存到 meta.json，以便后续回顾镜头剧情与接力参考"}),
                 "parent_clip_id": ("STRING", {"default": "", "tooltip": "【父镜头血缘ID】连接上一段 Clip Bin Picker 输出的 clip_id。用于在元数据中清晰记录多版本分支历史与承接血缘"}),
-                "video_file_name": (any_type, {"default": "", "tooltip": "【关联合成视频名】连接当前片段合成保存节点 (VHS_VideoCombine) 的 Filenames 输出，或手动输入关联的 MP4 文件名，建立视频与潜空间的 1:1 双向索引"}),
+                "video_file_name": (any_type, {"default": "", "tooltip": "【关联合成视频名】连接当前片段合成保存节点 (VHS_VideoCombine) 的 Filenames 输出，或手动输入关联的 MP4 文件名，系统将自动将该视频归档到资产包中"}),
+                "save_video": ("BOOLEAN", {"default": True, "tooltip": "【归档完整视频】是否在资产包内归档或编码生成完整 MP4 视频文件。开启后 Clip Bin Picker 画廊将支持悬停实时微动播放与声画视听弹窗！"}),
             }
         }
 
@@ -796,19 +798,22 @@ class MiniMaxClipBinSaverNode:
         shot_tag: str = "Auto (自动编号)",
         rating: int = 4,
         images: Optional[torch.Tensor] = None,
+        audio: Optional[Dict[str, Any]] = None,
         prompt: str = "",
         parent_clip_id: str = "",
         video_file_name: Any = "",
+        save_video: bool = True,
         **kwargs
     ) -> Dict[str, Any]:
         if latent is None:
             raise ValueError("MiniMaxClipBinSaver: 'latent' input is required.")
 
-        video, audio = _unpack_latent(latent)
+        video, audio_lat = _unpack_latent(latent)
         if video is None:
             raise ValueError("MiniMaxClipBinSaver: latent contains no video samples.")
 
         images = _standardize_image_tensor(images)
+        audio = _standardize_audio_dict(audio)
 
         actual_shot = (shot_tag or "").strip()
         if actual_shot.startswith("Auto") or not actual_shot:
@@ -833,7 +838,7 @@ class MiniMaxClipBinSaverNode:
 
         meta_obj, clip_dir, preview_pil = save_clip_asset(
             video_tensor=video,
-            audio_tensor=audio,
+            audio_tensor=audio_lat,
             images=images,
             project_name=project_name,
             shot_tag=actual_shot,
@@ -841,6 +846,9 @@ class MiniMaxClipBinSaverNode:
             rating=rating,
             parent_clip_id=parent_clip_id if isinstance(parent_clip_id, str) else str(parent_clip_id),
             associated_video_path=resolved_video_name,
+            raw_video_source=video_file_name,
+            audio_dict=audio,
+            save_video=save_video,
         )
 
         preview_tensor = pil_to_tensor(preview_pil)

@@ -294,6 +294,13 @@ def test_safe_vae_decoders():
 def test_clip_bin_saver_video_file_name_from_vhs():
     temp_dir = setup_temp_folder_paths()
     try:
+        # Create a mock video file in output/my_subfolder
+        vhs_subfolder = os.path.join(temp_dir, "my_subfolder")
+        os.makedirs(vhs_subfolder, exist_ok=True)
+        mock_vhs_file = os.path.join(vhs_subfolder, "my_video_0001.mp4")
+        with open(mock_vhs_file, "wb") as f:
+            f.write(b"MOCK_MP4_CONTENT_12345")
+
         v = torch.randn(1, 16, 4, 16, 16)
         latent = nodes.pack_av_latent(v, None)
 
@@ -306,7 +313,8 @@ def test_clip_bin_saver_video_file_name_from_vhs():
             shot_tag="Shot 1",
             rating=5,
             prompt="A majestic lion",
-            video_file_name=vhs_filenames
+            video_file_name=vhs_filenames,
+            save_video=True
         )
         clip_id = res["result"][0]
         bin_dir = res["result"][2]
@@ -317,9 +325,62 @@ def test_clip_bin_saver_video_file_name_from_vhs():
         with open(meta_json, "r", encoding="utf-8") as f:
             data = json.load(f)
         assert data.get("prompt") == "A majestic lion"
-        assert data.get("associated_video_path") == "my_video_0001.mp4"
+        assert data.get("has_video") is True
+        assert data.get("video_file") == "video.mp4"
+
+        # Check physical archived video in clip_dir
+        archived_video = os.path.join(bin_dir, "video.mp4")
+        assert os.path.isfile(archived_video)
+        with open(archived_video, "rb") as f:
+            assert f.read() == b"MOCK_MP4_CONTENT_12345"
+
+        # Test API enrichment
+        from engine.clip_bin_api import get_project_clips_api
+        api_data = get_project_clips_api("VHSTest")
+        assert api_data["total_clips"] >= 1
+        clip_item = next(c for c in api_data["clips"] if c["clip_id"] == clip_id)
+        assert clip_item["has_video"] is True
+        assert clip_item["video_file"] == "video.mp4"
+        assert "video.mp4" in clip_item["video_url"]
+        assert "/view?filename=video.mp4" in clip_item["video_url"]
 
         print("test_clip_bin_saver_video_file_name_from_vhs passed!")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_clip_bin_saver_auto_encode_video_from_images():
+    temp_dir = setup_temp_folder_paths()
+    try:
+        v = torch.randn(1, 16, 4, 16, 16)
+        latent = nodes.pack_av_latent(v, None)
+        images = torch.rand(12, 64, 64, 3, dtype=torch.float32)
+        audio = {"waveform": torch.zeros(1, 2, 16000), "sample_rate": 32000}
+
+        saver = nodes.MiniMaxClipBinSaverNode()
+        res = saver.save_clip(
+            latent=latent,
+            project_name="AutoEncodeTest",
+            shot_tag="Shot 1",
+            rating=4,
+            images=images,
+            audio=audio,
+            prompt="A dancing robot",
+            save_video=True
+        )
+        clip_id = res["result"][0]
+        bin_dir = res["result"][2]
+
+        # Check if ffmpeg encoded video.mp4
+        archived_video = os.path.join(bin_dir, "video.mp4")
+        if shutil.which("ffmpeg"):
+            assert os.path.isfile(archived_video)
+            assert os.path.getsize(archived_video) > 0
+            with open(os.path.join(bin_dir, "meta.json"), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            assert data.get("has_video") is True
+
+        print("test_clip_bin_saver_auto_encode_video_from_images passed!")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -332,7 +393,9 @@ if __name__ == "__main__":
     test_auto_initial_and_chaining_unified_workflow()
     test_safe_vae_decoders()
     test_clip_bin_saver_video_file_name_from_vhs()
+    test_clip_bin_saver_auto_encode_video_from_images()
     print("\n>>> All MiniMax Clip Bin tests PASSED successfully! <<<")
+
 
 
 

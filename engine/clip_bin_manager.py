@@ -12,6 +12,10 @@ import json
 import time
 import glob
 import logging
+import shutil
+import subprocess
+import wave
+import tempfile
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
@@ -49,6 +53,8 @@ class ClipMeta:
     audio_shape: Optional[List[int]] = None
     parent_clip_id: Optional[str] = None
     associated_video_path: Optional[str] = None
+    has_video: bool = False
+    video_file: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -147,7 +153,19 @@ def rebuild_project_index(project_name: str) -> Dict[str, Any]:
                     try:
                         with open(meta_path, "r", encoding="utf-8") as f:
                             meta = json.load(f)
-                            clips.append(meta)
+                        if not meta.get("has_video"):
+                            for vid_candidate in ["video.mp4", "video.webm"]:
+                                if os.path.isfile(os.path.join(entry_path, vid_candidate)):
+                                    meta["has_video"] = True
+                                    meta["video_file"] = vid_candidate
+                                    break
+                            if not meta.get("has_video"):
+                                for f_name in os.listdir(entry_path):
+                                    if f_name.lower().endswith((".mp4", ".webm", ".mov", ".mkv")):
+                                        meta["has_video"] = True
+                                        meta["video_file"] = f_name
+                                        break
+                        clips.append(meta)
                     except Exception:
                         pass
     # Sort descending by creation date and unique clip_id
@@ -222,6 +240,162 @@ def create_side_by_side_preview(first_img: Image.Image, tail_img: Image.Image) -
     return composite
 
 
+def resolve_source_video_path(val: Any) -> Optional[str]:
+    """Resolves an existing video file path from VHS format, direct path, or ComfyUI output directory."""
+    if val is None:
+        return None
+
+    output_dir = "output"
+    temp_dir = "temp"
+    try:
+        import folder_paths
+        if hasattr(folder_paths, "get_output_directory"):
+            output_dir = folder_paths.get_output_directory()
+        if hasattr(folder_paths, "get_temp_directory"):
+            temp_dir = folder_paths.get_temp_directory()
+    except Exception:
+        pass
+
+    candidates = []
+
+    def _collect(v: Any, prefix: str = ""):
+        if v is None:
+            return
+        if isinstance(v, (list, tuple)):
+            # Check for VHS pair: [subfolder, [files...]]
+            if len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], (list, tuple)):
+                sub = v[0].strip()
+                for item in v[1]:
+                    _collect(item, prefix=sub)
+            else:
+                for item in v:
+                    _collect(item, prefix=prefix)
+        else:
+            s = str(v).strip().strip('"').strip("'")
+            if s:
+                if prefix:
+                    candidates.append(os.path.join(prefix, s))
+                candidates.append(s)
+
+    _collect(val)
+
+    for c in candidates:
+        # 1. Direct path
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+        # 2. Under ComfyUI output directory
+        p = os.path.join(output_dir, c)
+        if os.path.isfile(p):
+            return os.path.abspath(p)
+        # 3. Under ComfyUI temp directory
+        p = os.path.join(temp_dir, c)
+        if os.path.isfile(p):
+            return os.path.abspath(p)
+        # 4. Under common dirs
+        for base in ["output", "temp", "."]:
+            p = os.path.join(base, c)
+            if os.path.isfile(p):
+                return os.path.abspath(p)
+
+    return None
+
+
+def encode_images_to_mp4(
+    images: torch.Tensor,
+    output_mp4_path: str,
+    fps: float = 24.0,
+    audio_dict: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Encodes a [N, H, W, 3] float32 image batch into MP4 with optional audio using ffmpeg."""
+    if images is None or not isinstance(images, torch.Tensor) or images.ndim != 4 or len(images) == 0:
+        return False
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        logger.warning("[Clip Bin] ffmpeg executable not found in PATH; skipping video encoding.")
+        return False
+
+    N, H, W = images.shape[0], images.shape[1], images.shape[2]
+    # ffmpeg requires even dimensions for H.264
+    if W % 2 != 0 or H % 2 != 0:
+        W = W - (W % 2)
+        H = H - (H % 2)
+        images = images[:, :H, :W, :]
+
+    try:
+        raw_bytes = bytes(images.detach().clamp(0, 1).mul(255).to(torch.uint8).contiguous().cpu().untyped_storage())
+    except Exception as e:
+        logger.warning("[Clip Bin] Failed to extract raw image bytes for video encoding: %s", e)
+        return False
+
+    temp_wav_path = None
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{W}x{H}",
+        "-pix_fmt", "rgb24",
+        "-r", str(fps),
+        "-i", "-",
+    ]
+
+    if audio_dict is not None and isinstance(audio_dict, dict) and "waveform" in audio_dict:
+        try:
+            wf = audio_dict["waveform"]
+            sr = int(audio_dict.get("sample_rate", 32000))
+            if isinstance(wf, torch.Tensor) and wf.ndim >= 2:
+                if wf.ndim == 3:
+                    wf = wf[0]
+                channels = wf.shape[0]
+                wf_pcm = wf.clamp(-1, 1).mul(32767).to(torch.int16).t().contiguous().cpu()
+                audio_bytes = bytes(wf_pcm.untyped_storage())
+
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_f:
+                    temp_wav_path = tmp_f.name
+                with wave.open(temp_wav_path, "wb") as wav_file:
+                    wav_file.setnchannels(channels)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(sr)
+                    wav_file.writeframes(audio_bytes)
+
+                cmd.extend(["-i", temp_wav_path, "-c:a", "aac", "-b:a", "192k", "-shortest"])
+        except Exception as e:
+            logger.warning("[Clip Bin] Audio preparation failed for video encoding: %s", e)
+            if temp_wav_path and os.path.exists(temp_wav_path):
+                try:
+                    os.remove(temp_wav_path)
+                except Exception:
+                    pass
+            temp_wav_path = None
+
+    cmd.extend([
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        output_mp4_path
+    ])
+
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.communicate(input=raw_bytes)
+        success = proc.returncode == 0 and os.path.isfile(output_mp4_path) and os.path.getsize(output_mp4_path) > 0
+        if success:
+            logger.info("[Clip Bin] Successfully encoded video asset to '%s' (%s frames, %.2fs)",
+                        output_mp4_path, N, N / float(fps))
+        else:
+            logger.warning("[Clip Bin] ffmpeg video encoding returned code %s", proc.returncode)
+        return success
+    except Exception as e:
+        logger.warning("[Clip Bin] Exception during ffmpeg encoding: %s", e)
+        return False
+    finally:
+        if temp_wav_path and os.path.exists(temp_wav_path):
+            try:
+                os.remove(temp_wav_path)
+            except Exception:
+                pass
+
+
 def save_clip_asset(
     video_tensor: torch.Tensor,
     audio_tensor: Optional[torch.Tensor],
@@ -232,6 +406,9 @@ def save_clip_asset(
     rating: int = 3,
     parent_clip_id: Optional[str] = None,
     associated_video_path: Optional[str] = None,
+    raw_video_source: Any = None,
+    audio_dict: Optional[Dict[str, Any]] = None,
+    save_video: bool = True,
     fps: float = 24.0,
 ) -> Tuple[ClipMeta, str, Image.Image]:
     """Packages and persists a complete MiniMax Clip Bin asset.
@@ -246,7 +423,6 @@ def save_clip_asset(
     # Clean shot_tag for directory slug
     tag_slug = "".join(c for c in shot_tag if c.isalnum() or c in ("_", "-")).strip() or "Shot"
     clip_id = f"clip_{timestamp_str}_{tag_slug}"
-
 
     project_dir = get_project_dir(project_name)
     clip_dir = os.path.join(project_dir, clip_id)
@@ -318,7 +494,36 @@ def save_clip_asset(
         preview_pil = create_side_by_side_preview(first_pil, tail_pil)
         preview_pil.save(preview_path, "PNG")
 
-    # 3. Save meta.json
+    # 3. Video Asset Archiving
+    video_saved = False
+    saved_video_filename = None
+
+    if save_video:
+        # Check source video provided (e.g. from VHS_VideoCombine or path)
+        video_src_input = raw_video_source if raw_video_source is not None and str(raw_video_source).strip() else associated_video_path
+        src_video = resolve_source_video_path(video_src_input)
+        if src_video and os.path.isfile(src_video):
+            ext = os.path.splitext(src_video)[1].lower() or ".mp4"
+            dest_video = os.path.join(clip_dir, f"video{ext}")
+            try:
+                shutil.copy2(src_video, dest_video)
+                video_saved = True
+                saved_video_filename = f"video{ext}"
+                logger.info("[Clip Bin] Archived source video from '%s' into '%s'", src_video, dest_video)
+            except Exception as e:
+                logger.warning("[Clip Bin] Failed to copy source video from '%s': %s", src_video, e)
+
+        # If no source video, but images provided, auto-encode with ffmpeg
+        if not video_saved and images is not None:
+            dest_video = os.path.join(clip_dir, "video.mp4")
+            if encode_images_to_mp4(images, dest_video, fps=fps, audio_dict=audio_dict):
+                video_saved = True
+                saved_video_filename = "video.mp4"
+
+    meta_obj.has_video = video_saved
+    meta_obj.video_file = saved_video_filename
+
+    # 4. Save meta.json
     meta_json_path = os.path.join(clip_dir, "meta.json")
     with open(meta_json_path, "w", encoding="utf-8") as f:
         json.dump(asdict(meta_obj), f, indent=2, ensure_ascii=False)

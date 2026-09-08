@@ -153,6 +153,136 @@ function setupClipBinPickerWidget(node) {
         return starWrap;
     }
 
+    // Function to open full-featured audio/video modal preview
+    function openVideoModal(clip, projectName) {
+        const existing = document.getElementById("minimax-video-modal-overlay");
+        if (existing) existing.remove();
+
+        const overlay = document.createElement("div");
+        overlay.id = "minimax-video-modal-overlay";
+        overlay.className = "minimax-video-modal-overlay";
+
+        const modal = document.createElement("div");
+        modal.className = "minimax-video-modal";
+
+        // Modal Header
+        const mHeader = document.createElement("div");
+        mHeader.className = "minimax-modal-header";
+        mHeader.innerHTML = `
+            <div class="minimax-modal-title">
+                <span class="minimax-modal-shot-title">🎬 ${clip.shot_tag || "Shot"}</span>
+                <span class="minimax-modal-clip-id">${clip.clip_id}</span>
+            </div>
+            <button class="minimax-modal-close-btn" title="关闭 (Esc)">✕</button>
+        `;
+
+        // Modal Body
+        const mBody = document.createElement("div");
+        mBody.className = "minimax-modal-body";
+
+        const videoWrap = document.createElement("div");
+        videoWrap.className = "minimax-modal-video-wrap";
+        const video = document.createElement("video");
+        video.className = "minimax-modal-video";
+        video.src = clip.video_url;
+        video.controls = true;
+        video.autoplay = true;
+        video.playsInline = true;
+        videoWrap.appendChild(video);
+
+        const metaPanel = document.createElement("div");
+        metaPanel.className = "minimax-modal-meta";
+        metaPanel.innerHTML = `
+            <div class="minimax-modal-meta-title">镜头属性看板</div>
+            <div class="minimax-modal-row">
+                <span class="label">归属项目:</span>
+                <span class="value">${projectName}</span>
+            </div>
+            <div class="minimax-modal-row">
+                <span class="label">规格参数:</span>
+                <span class="value">${clip.frames || 124} 帧 | ${clip.duration_seconds || 5.2} 秒 (${clip.fps || 24} fps)</span>
+            </div>
+            <div class="minimax-modal-row">
+                <span class="label">生成时间:</span>
+                <span class="value">${clip.created_at || "未知"}</span>
+            </div>
+            <div class="minimax-modal-row">
+                <span class="label">品质评级:</span>
+                <span class="value" id="minimax-modal-stars-container"></span>
+            </div>
+            ${clip.parent_clip_id ? `
+            <div class="minimax-modal-row">
+                <span class="label">父镜头血缘:</span>
+                <span class="value parent-link" title="${clip.parent_clip_id}">${clip.parent_clip_id}</span>
+            </div>` : ""}
+            ${clip.prompt ? `
+            <div class="minimax-modal-prompt-wrap">
+                <div class="label">正向描述词 (Prompt):</div>
+                <div class="prompt-content">${clip.prompt}</div>
+            </div>` : ""}
+        `;
+
+        // Interactive rating inside modal
+        const starsContainer = metaPanel.querySelector("#minimax-modal-stars-container");
+        if (starsContainer) {
+            starsContainer.appendChild(renderStars(clip.rating || 3, clip.clip_id, projectName));
+        }
+
+        mBody.appendChild(videoWrap);
+        mBody.appendChild(metaPanel);
+
+        // Modal Footer
+        const mFooter = document.createElement("div");
+        mFooter.className = "minimax-modal-footer";
+
+        const selectBtn = document.createElement("button");
+        selectBtn.className = "minimax-modal-select-btn";
+        selectBtn.innerHTML = `🎯 设为当前接力源 (Select Context)`;
+        selectBtn.onclick = () => {
+            if (selectionWidget) {
+                selectionWidget.value = clip.clip_id;
+                selectionWidget.callback?.(selectionWidget.value);
+            }
+            updateSelectionDisplay(clip.shot_tag ? `${clip.shot_tag} (${clip.clip_id.slice(-8)})` : clip.clip_id);
+            closeModal();
+            loadClips();
+        };
+
+        const closeBtn = document.createElement("button");
+        closeBtn.className = "minimax-modal-cancel-btn";
+        closeBtn.innerText = "关闭";
+        closeBtn.onclick = closeModal;
+
+        mFooter.appendChild(selectBtn);
+        mFooter.appendChild(closeBtn);
+
+        modal.appendChild(mHeader);
+        modal.appendChild(mBody);
+        modal.appendChild(mFooter);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        function closeModal() {
+            video.pause();
+            video.src = "";
+            overlay.classList.add("closing");
+            setTimeout(() => overlay.remove(), 180);
+            window.removeEventListener("keydown", onKeyDown);
+        }
+
+        function onKeyDown(e) {
+            if (e.key === "Escape") {
+                closeModal();
+            }
+        }
+        window.addEventListener("keydown", onKeyDown);
+
+        mHeader.querySelector(".minimax-modal-close-btn").onclick = closeModal;
+        overlay.onclick = (e) => {
+            if (e.target === overlay) closeModal();
+        };
+    }
+
     // Function to load and render clips
     async function loadClips() {
         const currentProject = projectWidget?.value || "Default_Project";
@@ -232,6 +362,74 @@ function setupClipBinPickerWidget(node) {
                         thumbWrap.appendChild(img);
                     } else {
                         thumbWrap.innerHTML = `<div class="minimax-clip-thumb-placeholder">🎬</div>`;
+                    }
+
+                    // Video badge & play trigger
+                    if (clip.has_video && clip.video_url) {
+                        const vidBadge = document.createElement("div");
+                        vidBadge.className = "minimax-clip-video-badge";
+                        vidBadge.innerHTML = "▶ MP4";
+                        vidBadge.title = "点击全屏视听播放";
+                        vidBadge.onclick = (e) => {
+                            e.stopPropagation();
+                            openVideoModal(clip, currentProject);
+                        };
+                        thumbWrap.appendChild(vidBadge);
+
+                        const playOverlay = document.createElement("button");
+                        playOverlay.className = "minimax-clip-play-overlay";
+                        playOverlay.innerHTML = "▶";
+                        playOverlay.title = "视听播放";
+                        playOverlay.onclick = (e) => {
+                            e.stopPropagation();
+                            openVideoModal(clip, currentProject);
+                        };
+                        thumbWrap.appendChild(playOverlay);
+
+                        // Hover-to-Play dynamic preview (muted, lightweight loop)
+                        let hoverVideo = null;
+                        let hoverTimer = null;
+
+                        card.addEventListener("mouseenter", () => {
+                            hoverTimer = setTimeout(() => {
+                                if (!hoverVideo) {
+                                    hoverVideo = document.createElement("video");
+                                    hoverVideo.className = "minimax-clip-hover-video";
+                                    hoverVideo.src = clip.video_url;
+                                    hoverVideo.muted = true;
+                                    hoverVideo.loop = true;
+                                    hoverVideo.playsInline = true;
+                                    hoverVideo.autoplay = true;
+                                    thumbWrap.appendChild(hoverVideo);
+                                }
+                                hoverVideo.play().catch(() => {});
+                                hoverVideo.style.opacity = "1";
+                            }, 180);
+                        });
+
+                        card.addEventListener("mouseleave", () => {
+                            if (hoverTimer) {
+                                clearTimeout(hoverTimer);
+                                hoverTimer = null;
+                            }
+                            if (hoverVideo) {
+                                hoverVideo.pause();
+                                hoverVideo.style.opacity = "0";
+                                const vRef = hoverVideo;
+                                hoverVideo = null;
+                                setTimeout(() => {
+                                    if (vRef && vRef.parentNode) {
+                                        vRef.remove();
+                                    }
+                                }, 200);
+                            }
+                        });
+
+                        // Double click to open full video modal
+                        card.ondblclick = (e) => {
+                            e.stopPropagation();
+                            openVideoModal(clip, currentProject);
+                        };
                     }
 
                     if (isActive) {

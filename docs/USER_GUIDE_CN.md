@@ -96,19 +96,24 @@
 
 - 必填：`latent`、`project_name`、`shot_tag`、`rating`。
 - `shot_tag` 是自由文本标签，例如“雨夜登场”或“Take 2”；保留 `Auto (自动编号)` 会生成 `Shot 1`、`Shot 2` 等自动编号。
-- 建议连接 `images`，让素材箱生成首尾预览卡片。
-- 可选连接 `prompt`、`parent_clip_id` 与 `video_file_name`，记录提示词、续写血缘和导出视频名。
+- 建议连接 `images` 和可选的 `audio`，让素材箱生成首尾预览卡片并可自动编码封装视频。
+- `video_file_name`：连接合成保存节点（如 `VHS_VideoCombine`）的 Filenames 输出，系统会自动将实际生成的 MP4 视频复制归档到该镜头的素材包中。
+- `save_video`：默认为 `True`。开启后若传入了视频文件名则自动归档，若未传入但输入了 `images`，将自动编码生成 `video.mp4`，让素材包成为真正独立、包含潜空间和成品视听的自包含媒体池。
+- 可选连接 `prompt`、`parent_clip_id`，记录提示词与多分支承接血缘。
 
 要让下一段正常续写，请保存采样器输出的**完整**联合 AV latent；预览图则可以使用裁切后的 `trimmed_images`。
 
 ### 5. `MiniMax H3 Clip Bin Picker (Gallery Loader)`
 
-以画廊方式浏览和载入素材箱中的片段。
+以画廊方式浏览和载入素材箱中的片段，支持全动态视听交互。
 
 - `project_name`：选择项目素材箱。
 - `mode`：`Auto` 在素材箱为空时作为首段生成；有素材时自动接力。`Force Initial` 强制开始新首段；`Strict Chaining` 在没有可用来源时直接报错。
 - `filter_rating`：按星级过滤候选镜头。
 - `clip_selection`：使用 `latest` 自动选择最新片段，或填写 `clip_id` / `shot_tag` 来选择指定历史镜头。
+- **全新动态视听交互**：
+  - **悬停动效预览（Hover-to-Play）**：鼠标移入带有视频的卡片，自动静音循环播放动态预览，移出自动还原；
+  - **全功能声画视听弹窗（Modal Player）**：点击卡片角标 `▶ MP4` 或画面中央播放按钮（亦可双击卡片），弹出视听播放弹窗，支持声音控制、时间轨拖拽、查看完整提示词与镜头参数，并可一键「设为当前接力源」；
 - 输出 `latent` 接 Continuation Applier 的 `context_latent`；`tail_frame`、`first_frame` 和 `prompt` 可作为下一段的参考或提示词素材；`clip_id` 接下一次 Clip Bin Saver 的 `parent_clip_id`。
 
 ### 6. 其他辅助节点
