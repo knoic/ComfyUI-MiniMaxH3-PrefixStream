@@ -18,6 +18,8 @@ from .clip_bin_manager import (
     load_project_index,
     save_project_index,
     rebuild_project_index,
+    VIDEO_EXTENSIONS,
+    resolve_source_video_path,
 )
 
 def get_project_clips_api(project_name: str) -> Dict[str, Any]:
@@ -51,18 +53,37 @@ def get_project_clips_api(project_name: str) -> Dict[str, Any]:
             )
         )
 
-        # Check existing video file
+        # Check existing video file (must have valid video extension)
         video_file = c.get("video_file", "")
-        if not video_file or not os.path.isfile(os.path.join(clip_dir, video_file)):
+        if not video_file or not any(video_file.lower().endswith(e) for e in VIDEO_EXTENSIONS) or not os.path.isfile(os.path.join(clip_dir, video_file)):
+            video_file = ""
             for v_cand in ["video.mp4", "video.webm"]:
                 if os.path.isfile(os.path.join(clip_dir, v_cand)):
                     video_file = v_cand
                     break
             if not video_file and os.path.isdir(clip_dir):
                 for fn in os.listdir(clip_dir):
-                    if fn.lower().endswith((".mp4", ".webm", ".mov", ".mkv")):
+                    if any(fn.lower().endswith(e) for e in VIDEO_EXTENSIONS):
                         video_file = fn
                         break
+
+            # Auto-repair from associated_video_path if found in output
+            if not video_file and c.get("associated_video_path"):
+                src_v = resolve_source_video_path(c.get("associated_video_path"))
+                if src_v and os.path.isfile(src_v):
+                    ext = os.path.splitext(src_v)[1].lower()
+                    if ext in VIDEO_EXTENSIONS:
+                        dest_v = os.path.join(clip_dir, f"video{ext}")
+                        try:
+                            import shutil
+                            shutil.copy2(src_v, dest_v)
+                            video_file = f"video{ext}"
+                            # Also delete bogus video.png if present
+                            bogus = os.path.join(clip_dir, "video.png")
+                            if os.path.isfile(bogus):
+                                os.remove(bogus)
+                        except Exception:
+                            pass
 
         has_video = bool(video_file and os.path.isfile(os.path.join(clip_dir, video_file)))
         video_url = f"/view?filename={video_file}&subfolder={subfolder}&type=output" if has_video else ""

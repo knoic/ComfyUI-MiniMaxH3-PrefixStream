@@ -297,7 +297,10 @@ def test_clip_bin_saver_video_file_name_from_vhs():
         # Create a mock video file in output/my_subfolder
         vhs_subfolder = os.path.join(temp_dir, "my_subfolder")
         os.makedirs(vhs_subfolder, exist_ok=True)
+        mock_vhs_png = os.path.join(vhs_subfolder, "my_video_0001.png")
         mock_vhs_file = os.path.join(vhs_subfolder, "my_video_0001.mp4")
+        with open(mock_vhs_png, "wb") as f:
+            f.write(b"MOCK_PNG_IMAGE_CONTENT")
         with open(mock_vhs_file, "wb") as f:
             f.write(b"MOCK_MP4_CONTENT_12345")
 
@@ -305,8 +308,8 @@ def test_clip_bin_saver_video_file_name_from_vhs():
         latent = nodes.pack_av_latent(v, None)
 
         saver = nodes.MiniMaxClipBinSaverNode()
-        # VHS_VideoCombine outputs Filenames as ([subfolder, ["output/video_001.mp4"]],) or (["video_001.mp4"],)
-        vhs_filenames = (["my_subfolder", ["my_video_0001.mp4"]],)
+        # VHS_VideoCombine outputs Filenames with both png and mp4: (True, [png, mp4])
+        vhs_filenames = (True, ["my_subfolder/my_video_0001.png", "my_subfolder/my_video_0001.mp4"])
         res = saver.save_clip(
             latent=latent,
             project_name="VHSTest",

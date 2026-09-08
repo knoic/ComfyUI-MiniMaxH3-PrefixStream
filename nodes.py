@@ -826,9 +826,17 @@ class MiniMaxClipBinSaverNode:
             if isinstance(val, (list, tuple)):
                 if not val:
                     return ""
-                # Recursively inspect the last element (VHS format: [bool_or_subfolder, [paths...]])
+                # Prioritize video extensions in list/tuple
+                for item in val:
+                    if isinstance(item, (list, tuple)):
+                        extracted = _extract_filename(item)
+                        if extracted and any(extracted.lower().endswith(e) for e in (".mp4", ".webm", ".mov", ".mkv")):
+                            return extracted
+                    elif isinstance(item, str) and any(item.lower().endswith(e) for e in (".mp4", ".webm", ".mov", ".mkv")):
+                        return item.strip()
                 return _extract_filename(val[-1])
-            return str(val).strip()
+            s = str(val).strip()
+            return s if s.lower() not in ("true", "false", "none") else ""
 
         if video_file_name is not None:
             resolved_video_name = _extract_filename(video_file_name)

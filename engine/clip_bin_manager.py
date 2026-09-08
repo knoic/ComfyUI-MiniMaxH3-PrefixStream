@@ -153,6 +153,21 @@ def rebuild_project_index(project_name: str) -> Dict[str, Any]:
                     try:
                         with open(meta_path, "r", encoding="utf-8") as f:
                             meta = json.load(f)
+                        # Reject non-video extensions (e.g. video.png)
+                        curr_v = str(meta.get("video_file", "")).lower()
+                        if curr_v.endswith(NON_VIDEO_EXTENSIONS) or not curr_v.endswith(VIDEO_EXTENSIONS):
+                            meta["has_video"] = False
+                            meta["video_file"] = None
+
+                        # Clean up bogus video.png if present
+                        bogus_png = os.path.join(entry_path, "video.png")
+                        if os.path.isfile(bogus_png):
+                            try:
+                                os.remove(bogus_png)
+                            except Exception:
+                                pass
+
+                        # Check for existing video file
                         if not meta.get("has_video"):
                             for vid_candidate in ["video.mp4", "video.webm"]:
                                 if os.path.isfile(os.path.join(entry_path, vid_candidate)):
@@ -161,10 +176,28 @@ def rebuild_project_index(project_name: str) -> Dict[str, Any]:
                                     break
                             if not meta.get("has_video"):
                                 for f_name in os.listdir(entry_path):
-                                    if f_name.lower().endswith((".mp4", ".webm", ".mov", ".mkv")):
+                                    if f_name.lower().endswith(VIDEO_EXTENSIONS):
                                         meta["has_video"] = True
                                         meta["video_file"] = f_name
                                         break
+
+                        # Auto-heal: if no video in clip dir, try to restore from associated_video_path
+                        if not meta.get("has_video") and meta.get("associated_video_path"):
+                            src_v = resolve_source_video_path(meta.get("associated_video_path"))
+                            if src_v and os.path.isfile(src_v):
+                                ext = os.path.splitext(src_v)[1].lower()
+                                if ext in VIDEO_EXTENSIONS:
+                                    dest_v = os.path.join(entry_path, f"video{ext}")
+                                    try:
+                                        shutil.copy2(src_v, dest_v)
+                                        meta["has_video"] = True
+                                        meta["video_file"] = f"video{ext}"
+                                        meta["associated_video_path"] = os.path.basename(src_v)
+                                        with open(meta_path, "w", encoding="utf-8") as mf:
+                                            json.dump(meta, mf, indent=2, ensure_ascii=False)
+                                    except Exception:
+                                        pass
+
                         clips.append(meta)
                     except Exception:
                         pass
@@ -240,6 +273,10 @@ def create_side_by_side_preview(first_img: Image.Image, tail_img: Image.Image) -
     return composite
 
 
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".flv", ".gif")
+NON_VIDEO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".json", ".txt", ".safetensors")
+
+
 def resolve_source_video_path(val: Any) -> Optional[str]:
     """Resolves an existing video file path from VHS format, direct path, or ComfyUI output directory."""
     if val is None:
@@ -256,7 +293,7 @@ def resolve_source_video_path(val: Any) -> Optional[str]:
     except Exception:
         pass
 
-    candidates = []
+    raw_candidates = []
 
     def _collect(v: Any, prefix: str = ""):
         if v is None:
@@ -272,29 +309,48 @@ def resolve_source_video_path(val: Any) -> Optional[str]:
                     _collect(item, prefix=prefix)
         else:
             s = str(v).strip().strip('"').strip("'")
-            if s:
+            if s and s.lower() not in ("true", "false", "none"):
                 if prefix:
-                    candidates.append(os.path.join(prefix, s))
-                candidates.append(s)
+                    raw_candidates.append(os.path.join(prefix, s))
+                raw_candidates.append(s)
 
     _collect(val)
 
-    for c in candidates:
+    # Separate candidates: prioritized video files vs derived candidates from image stems
+    video_candidates = []
+    derived_candidates = []
+
+    for c in raw_candidates:
+        c_lower = c.lower()
+        if c_lower.endswith(VIDEO_EXTENSIONS):
+            video_candidates.append(c)
+        elif c_lower.endswith(NON_VIDEO_EXTENSIONS):
+            # VHS sometimes outputs companion image first: e.g. h3_00024.png -> search h3_00024.mp4 / h3_00024-audio.mp4
+            stem, _ = os.path.splitext(c)
+            for ext in [".mp4", "-audio.mp4", ".webm", ".mov"]:
+                derived_candidates.append(stem + ext)
+        else:
+            for ext in [".mp4", "-audio.mp4", ".webm"]:
+                derived_candidates.append(c + ext)
+
+    search_list = video_candidates + derived_candidates
+
+    for c in search_list:
         # 1. Direct path
-        if os.path.isfile(c):
+        if os.path.isfile(c) and c.lower().endswith(VIDEO_EXTENSIONS):
             return os.path.abspath(c)
         # 2. Under ComfyUI output directory
         p = os.path.join(output_dir, c)
-        if os.path.isfile(p):
+        if os.path.isfile(p) and p.lower().endswith(VIDEO_EXTENSIONS):
             return os.path.abspath(p)
         # 3. Under ComfyUI temp directory
         p = os.path.join(temp_dir, c)
-        if os.path.isfile(p):
+        if os.path.isfile(p) and p.lower().endswith(VIDEO_EXTENSIONS):
             return os.path.abspath(p)
         # 4. Under common dirs
         for base in ["output", "temp", "."]:
             p = os.path.join(base, c)
-            if os.path.isfile(p):
+            if os.path.isfile(p) and p.lower().endswith(VIDEO_EXTENSIONS):
                 return os.path.abspath(p)
 
     return None
@@ -503,15 +559,17 @@ def save_clip_asset(
         video_src_input = raw_video_source if raw_video_source is not None and str(raw_video_source).strip() else associated_video_path
         src_video = resolve_source_video_path(video_src_input)
         if src_video and os.path.isfile(src_video):
-            ext = os.path.splitext(src_video)[1].lower() or ".mp4"
-            dest_video = os.path.join(clip_dir, f"video{ext}")
-            try:
-                shutil.copy2(src_video, dest_video)
-                video_saved = True
-                saved_video_filename = f"video{ext}"
-                logger.info("[Clip Bin] Archived source video from '%s' into '%s'", src_video, dest_video)
-            except Exception as e:
-                logger.warning("[Clip Bin] Failed to copy source video from '%s': %s", src_video, e)
+            ext = os.path.splitext(src_video)[1].lower()
+            if ext in VIDEO_EXTENSIONS:
+                dest_video = os.path.join(clip_dir, f"video{ext}")
+                try:
+                    shutil.copy2(src_video, dest_video)
+                    video_saved = True
+                    saved_video_filename = f"video{ext}"
+                    meta_obj.associated_video_path = os.path.basename(src_video)
+                    logger.info("[Clip Bin] Archived source video from '%s' into '%s'", src_video, dest_video)
+                except Exception as e:
+                    logger.warning("[Clip Bin] Failed to copy source video from '%s': %s", src_video, e)
 
         # If no source video, but images provided, auto-encode with ffmpeg
         if not video_saved and images is not None:
@@ -519,6 +577,14 @@ def save_clip_asset(
             if encode_images_to_mp4(images, dest_video, fps=fps, audio_dict=audio_dict):
                 video_saved = True
                 saved_video_filename = "video.mp4"
+
+        # Remove any lingering invalid video.png from clip_dir if present
+        bogus_png = os.path.join(clip_dir, "video.png")
+        if os.path.isfile(bogus_png):
+            try:
+                os.remove(bogus_png)
+            except Exception:
+                pass
 
     meta_obj.has_video = video_saved
     meta_obj.video_file = saved_video_filename
