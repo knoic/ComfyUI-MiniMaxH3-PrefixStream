@@ -68,10 +68,15 @@ class KVCacheConfig:
     _rolling_latent_frames: Optional[int] = None
     _anchor_latent_frames: Optional[int] = None
 
+    def is_decoupled_mode(self) -> bool:
+        """Returns True if Decoupled Pure Prefix mode is enabled (zero timeline overlap)."""
+        cm = str(self.cache_mode).lower()
+        return "decoupled" in cm or "pure" in cm or "zero_overlap" in cm
+
     def is_cache_enabled(self) -> bool:
         """Returns True if DiT KV caching is enabled; False for 100% native ComfyUI attention."""
         cm = str(self.cache_mode).lower()
-        return "step" in cm or "dynamic" in cm or "experimental" in cm
+        return "step" in cm or "dynamic" in cm or "experimental" in cm or self.is_decoupled_mode()
 
     @property
     def rolling_latent_frames(self) -> int:

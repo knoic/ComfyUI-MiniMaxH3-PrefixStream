@@ -5015,7 +5015,7 @@
     },
     {
       "id": 368,
-      "type": "MiniMaxLoadLatent",
+      "type": "MiniMaxClipBinPicker",
       "pos": [
         10791,
         3350
@@ -5029,18 +5029,42 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "latent_path",
+          "name": "project_name",
           "type": "STRING",
           "widget": {
-            "name": "latent_path"
+            "name": "project_name"
           },
           "link": null
         },
         {
-          "name": "clip_index",
-          "type": "INT",
+          "name": "mode",
+          "type": "COMBO",
           "widget": {
-            "name": "clip_index"
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "name": "filter_rating",
+          "type": "COMBO",
+          "widget": {
+            "name": "filter_rating"
+          },
+          "link": null
+        },
+        {
+          "name": "clip_selection",
+          "type": "STRING",
+          "widget": {
+            "name": "clip_selection"
+          },
+          "link": null
+        },
+        {
+          "name": "custom_clip_path",
+          "type": "STRING",
+          "widget": {
+            "name": "custom_clip_path"
           },
           "link": null
         }
@@ -5057,29 +5081,45 @@
           "slot_index": 0
         },
         {
-          "name": "loaded_path",
-          "type": "STRING",
+          "name": "tail_frame",
+          "type": "IMAGE",
           "links": [],
           "slot_index": 1
         },
         {
-          "name": "latent_info",
-          "type": "STRING",
+          "name": "first_frame",
+          "type": "IMAGE",
           "links": [],
           "slot_index": 2
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 3
+        },
+        {
+          "name": "clip_id",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 4
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxLoadLatent"
+        "Node name for S&R": "MiniMaxClipBinPicker"
       },
-      "title": "MiniMax H3 Load AV Latent (Standalone Clip 1)",
+      "title": "MiniMax H3 Clip Bin Picker (Gallery Loader & Context)",
       "widgets_values": [
-        "minimax_h3/clip",
-        1
+        "Default_Project",
+        "Auto (首段全新 / 后续自动接力)",
+        "All (1-5 ⭐)",
+        "latest"
       ],
       "widgets_values_named": {
-        "latent_path": "minimax_h3/clip",
-        "clip_index": 1
+        "project_name": "Default_Project",
+        "mode": "Auto (首段全新 / 后续自动接力)",
+        "filter_rating": "All (1-5 ⭐)",
+        "clip_selection": "latest"
       }
     },
     {
@@ -5167,7 +5207,7 @@
     },
     {
       "id": 376,
-      "type": "MiniMaxSaveLatent",
+      "type": "MiniMaxClipBinSaver",
       "pos": [
         12130,
         3200
@@ -5186,47 +5226,98 @@
           "link": 545
         },
         {
-          "name": "filename_prefix",
+          "name": "project_name",
           "type": "STRING",
           "widget": {
-            "name": "filename_prefix"
+            "name": "project_name"
           },
           "link": null
         },
         {
-          "name": "clip_index",
+          "name": "shot_tag",
+          "type": "STRING",
+          "widget": {
+            "name": "shot_tag"
+          },
+          "link": null
+        },
+        {
+          "name": "rating",
           "type": "INT",
           "widget": {
-            "name": "clip_index"
+            "name": "rating"
+          },
+          "link": null
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": null
+        },
+        {
+          "name": "parent_clip_id",
+          "type": "STRING",
+          "widget": {
+            "name": "parent_clip_id"
+          },
+          "link": null
+        },
+        {
+          "name": "video_file_name",
+          "type": "STRING",
+          "widget": {
+            "name": "video_file_name"
           },
           "link": null
         }
       ],
       "outputs": [
         {
-          "name": "saved_path",
+          "name": "clip_id",
           "type": "STRING",
           "links": [],
           "slot_index": 0
         },
         {
-          "name": "latent_info",
-          "type": "STRING",
+          "name": "preview_image",
+          "type": "IMAGE",
           "links": [],
           "slot_index": 1
+        },
+        {
+          "name": "bin_path",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 2
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxSaveLatent"
+        "Node name for S&R": "MiniMaxClipBinSaver"
       },
-      "title": "MiniMax H3 Save AV Latent (Standalone)",
+      "title": "MiniMax H3 Clip Bin Saver (Media Pool)",
       "widgets_values": [
-        "minimax_h3/clip",
-        2
+        "Default_Project",
+        "Auto (自动编号)",
+        4,
+        "",
+        "",
+        ""
       ],
       "widgets_values_named": {
-        "filename_prefix": "minimax_h3/clip",
-        "clip_index": 2
+        "project_name": "Default_Project",
+        "shot_tag": "Auto (自动编号)",
+        "rating": 4,
+        "prompt": "",
+        "parent_clip_id": "",
+        "video_file_name": ""
       }
     },
     {

@@ -49,6 +49,17 @@ try:
         estimate_luminance_gain,
         apply_luminance_gain_fade,
     )
+    from .engine.clip_bin_manager import (
+        save_clip_asset,
+        load_clip_asset,
+        get_project_dir,
+        list_projects,
+        load_project_index,
+        get_clips_for_selection,
+        format_clip_label,
+        pil_to_tensor,
+        create_placeholder_card,
+    )
 except (ImportError, ValueError):
     from engine.cache_manager import (
         KVCacheConfig,
@@ -71,6 +82,20 @@ except (ImportError, ValueError):
         estimate_luminance_gain,
         apply_luminance_gain_fade,
     )
+    from engine.clip_bin_manager import (
+        save_clip_asset,
+        load_clip_asset,
+        get_project_dir,
+        list_projects,
+        load_project_index,
+        get_clips_for_selection,
+        format_clip_label,
+        pil_to_tensor,
+        create_placeholder_card,
+    )
+
+
+
 
 
 class MiniMaxPrefixCacheConfigNode:
@@ -82,10 +107,11 @@ class MiniMaxPrefixCacheConfigNode:
             "required": {
                 "cache_mode": ([
                     "Safe Native (Zero Artifacts, Recommended)",
-                    "Step-1 Dynamic Cache (Experimental Acceleration)"
+                    "Step-1 Dynamic Cache (Experimental Acceleration)",
+                    "Decoupled Pure Prefix (Zero Overlap, Prompt-Aligned)"
                 ], {
                     "default": "Safe Native (Zero Artifacts, Recommended)",
-                    "tooltip": "模式选择: Safe Native 采用 100% 原生 ComfyUI Attention 运算，配合网格对齐关键帧注入，从数学层面根除闪烁与色偏；Step-1 Dynamic Cache 采用在线动态 KV 缓存以获得加速。"
+                    "tooltip": "模式选择: Safe Native 采用 100% 原生 ComfyUI Attention 运算；Step-1 Dynamic Cache 采用在线动态 KV 缓存；Decoupled Pure Prefix (Zero Overlap) 彻底解耦时间轴，前缀作为纯外部只读 KV 注入，新视频从 t=0 起跑，提示词动作完美对齐第 0 秒，免裁切零损耗。"
                 }),
                 "cache_dtype": (["fp8", "bf16", "fp16"], {"default": "fp8"}),
                 "device_mode": (["auto", "gpu", "cpu_pinned"], {"default": "auto"}),
@@ -325,12 +351,23 @@ class MiniMaxTrimPrefixLatentNode:
         **kwargs
     ) -> Tuple[Optional[torch.Tensor], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         # 1. Determine trim frame count
+        is_decoupled = False
+        if session is not None and getattr(session.config, "is_decoupled_mode", lambda: False)():
+            is_decoupled = True
+        elif cache_config is not None and getattr(cache_config, "is_decoupled_mode", lambda: False)():
+            is_decoupled = True
+
         actual_trim_frames = trim_frames
-        if actual_trim_frames <= 0:
-            if session is not None and session.last_rolling_frames > 0:
+        if is_decoupled and trim_frames == 0:
+            actual_trim_frames = 0
+            logger.info("[Trim AV] Decoupled Pure Prefix Mode active: 0 overlap frames to trim, safely passing through.")
+        elif actual_trim_frames <= 0:
+            if session is not None:
+                # Strictly respect session: 0 for initial clip, >0 for continuation clips
                 actual_trim_frames = session.last_rolling_frames
             elif cache_config is not None:
                 actual_trim_frames = cache_config.rolling_frames
+
 
         # 2. Pixel & audio waveform trimming (Golden Standard)
         out_images = None
@@ -846,6 +883,245 @@ class MiniMaxLoadLatentNode:
         return (out_latent, target_file, info_str)
 
 
+class MiniMaxClipBinSaverNode:
+    """Saves a unified MiniMax H3 AV Latent into the Clip Bin media pool with keyframes, preview card, and rich metadata."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "latent": ("LATENT", {"tooltip": "采样器输出的原生联合音画 Latent (支持 NestedTensor)"}),
+                "project_name": ("STRING", {
+                    "default": "Default_Project",
+                    "tooltip": "素材箱项目名称（不同故事/场景独立归档管理）"
+                }),
+                "shot_tag": ("STRING", {
+                    "default": "Auto (自动编号)",
+                    "tooltip": "镜头名称或动作标签（填 'Auto (自动编号)' 将自动递增为 Shot 1, Shot 2...）"
+                }),
+                "rating": ("INT", {
+                    "default": 4, "min": 1, "max": 5, "step": 1,
+                    "tooltip": "镜头星标打分（1~5星），方便事后一键过滤废案"
+                }),
+            },
+            "optional": {
+                "images": ("IMAGE", {"tooltip": "VAE Decode 解码的视频帧。连接后自动截取首帧与最后一帧生成高清缩略图！"}),
+                "prompt": ("STRING", {"default": "", "tooltip": "本镜头的正向提示词（便于回溯与承接）"}),
+                "parent_clip_id": ("STRING", {"default": "", "tooltip": "父镜头 ID（记录分支血缘）"}),
+                "video_file_name": ("STRING", {"default": "", "tooltip": "关联的 MP4 视频文件名（建立 1:1 双向索引）"}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("clip_id", "preview_image", "bin_path")
+    OUTPUT_NODE = True
+    FUNCTION = "save_clip"
+    CATEGORY = "MiniMaxH3/ClipBin"
+
+    def save_clip(
+        self,
+        latent: Dict[str, Any],
+        project_name: str = "Default_Project",
+        shot_tag: str = "Auto (自动编号)",
+        rating: int = 4,
+        images: Optional[torch.Tensor] = None,
+        prompt: str = "",
+        parent_clip_id: str = "",
+        video_file_name: str = "",
+        **kwargs
+    ) -> Dict[str, Any]:
+        if latent is None:
+            raise ValueError("MiniMaxClipBinSaver: 'latent' input is required.")
+
+        video, audio = _unpack_latent(latent)
+        if video is None:
+            raise ValueError("MiniMaxClipBinSaver: latent contains no video samples.")
+
+        actual_shot = (shot_tag or "").strip()
+        if actual_shot.startswith("Auto") or not actual_shot:
+            idx = load_project_index(project_name)
+            actual_shot = f"Shot {len(idx.get('clips', [])) + 1}"
+
+        meta_obj, clip_dir, preview_pil = save_clip_asset(
+            video_tensor=video,
+            audio_tensor=audio,
+            images=images,
+            project_name=project_name,
+            shot_tag=actual_shot,
+            prompt=prompt,
+            rating=rating,
+            parent_clip_id=parent_clip_id,
+            associated_video_path=video_file_name,
+        )
+
+        preview_tensor = pil_to_tensor(preview_pil)
+
+        try:
+            import folder_paths
+            base_dir = folder_paths.get_output_directory()
+            subfolder = os.path.relpath(clip_dir, base_dir)
+        except Exception:
+            subfolder = ""
+
+        ui_images = [{
+            "filename": "preview.png",
+            "subfolder": subfolder,
+            "type": "output"
+        }]
+
+        logger.info("[Clip Bin Saver] Stored clip '%s' in '%s' (%s frames | ⭐%s | tag: %s)",
+                    meta_obj.clip_id, project_name, meta_obj.frames, meta_obj.rating, actual_shot)
+
+        return {
+            "ui": {"images": ui_images},
+            "result": (meta_obj.clip_id, preview_tensor, clip_dir)
+        }
+
+
+class MiniMaxClipBinPickerNode:
+    """Visually browses, filters, and loads clips from the Clip Bin with instant tail-frame output."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        projects = list_projects()
+        default_proj = projects[0] if projects else "Default_Project"
+        return {
+            "required": {
+                "project_name": ("STRING", {
+                    "default": default_proj,
+                    "tooltip": "素材箱项目名称。可填已有项目名，或通过控制台查看可用项目。"
+                }),
+                "mode": ([
+                    "Auto (首段全新 / 后续自动接力)",
+                    "Force Initial (强制新建首段，无上下文)",
+                    "Strict Chaining (必须接力指定或最新镜头)"
+                ], {
+                    "default": "Auto (首段全新 / 后续自动接力)",
+                    "tooltip": "工作模式：'Auto' 最省心，首次运行自动开辟首段，后续自动接力上一段；'Force Initial' 强制全新生成；'Strict Chaining' 强校验接力。"
+                }),
+                "filter_rating": ([
+                    "All (1-5 ⭐)",
+                    "⭐⭐⭐+ (3+ ⭐)",
+                    "⭐⭐⭐⭐+ (4+ ⭐)",
+                    "⭐⭐⭐⭐⭐ (5 ⭐)"
+                ], {
+                    "default": "All (1-5 ⭐)",
+                    "tooltip": "星级过滤器：只加载或选用大于等于该星级的优质镜头。"
+                }),
+                "clip_selection": ("STRING", {
+                    "default": "latest",
+                    "tooltip": "镜头选择：输入 'latest' (或留空) 自动加载本工程最新符合条件的优质镜头；也可输入具体的 clip_id (如 clip_2026...)。"
+                }),
+            },
+            "optional": {
+                "custom_clip_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "可选绝对路径覆盖。"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("LATENT", "IMAGE", "IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("latent", "tail_frame", "first_frame", "prompt", "clip_id")
+    FUNCTION = "pick_clip"
+    CATEGORY = "MiniMaxH3/ClipBin"
+
+    def pick_clip(
+        self,
+        project_name: str = "Default_Project",
+        mode: str = "Auto (首段全新 / 后续自动接力)",
+        filter_rating: str = "All (1-5 ⭐)",
+        clip_selection: str = "latest",
+        custom_clip_path: str = "",
+        **kwargs
+    ) -> Dict[str, Any]:
+        p_name = (project_name or "Default_Project").strip()
+        custom_p = (custom_clip_path or "").strip().strip('"').strip("'")
+
+        if custom_p and os.path.isdir(custom_p):
+            target_clip_dir = custom_p
+            p_name = os.path.basename(os.path.dirname(custom_p)) or p_name
+            target_clip_id = os.path.basename(custom_p)
+        else:
+            idx = load_project_index(p_name)
+            clips = idx.get("clips", [])
+
+            # Check if Initial Mode applies (Auto with empty bin, or Force Initial)
+            is_initial_mode = mode.startswith("Force Initial") or (mode.startswith("Auto") and len(clips) == 0)
+
+            if is_initial_mode:
+                logger.info("[Clip Bin Picker] Operating in Initial Generation mode for project '%s' (Zero prior context).", p_name)
+                card = create_placeholder_card("✨ Initial Clip Mode", f"Project: {p_name} | Ready for First Clip (No Context)")
+                placeholder_tensor = pil_to_tensor(card)
+                return {
+                    "ui": {"images": []},
+                    "result": (None, placeholder_tensor, placeholder_tensor, "", "[INITIAL_GENERATION]")
+                }
+
+            if not clips:
+                raise ValueError(f"MiniMaxClipBinPicker: No clips found in project '{p_name}'. "
+                                 f"Switch mode to 'Auto' to generate the first clip.")
+
+            # Parse star rating filter
+            min_stars = 1
+            if filter_rating.startswith("⭐⭐⭐⭐⭐"):
+                min_stars = 5
+            elif filter_rating.startswith("⭐⭐⭐⭐"):
+                min_stars = 4
+            elif filter_rating.startswith("⭐⭐⭐"):
+                min_stars = 3
+
+            filtered = [c for c in clips if c.get("rating", 3) >= min_stars]
+            if not filtered:
+                logger.warning("[Clip Bin Picker] No clips match rating >= %s in '%s', falling back to all clips.",
+                               min_stars, p_name)
+                filtered = clips
+
+            sel = (clip_selection or "latest").strip()
+            if sel.lower() in ("latest", "", "0", "auto", "default"):
+                target_clip = filtered[0]
+                target_clip_id = target_clip["clip_id"]
+            else:
+                # Substring / exact match
+                matched = [c for c in clips if sel in c.get("clip_id", "") or sel in c.get("shot_tag", "")]
+                if matched:
+                    target_clip_id = matched[0]["clip_id"]
+                else:
+                    target_clip_id = sel
+
+        video, audio, tail_tensor, first_tensor, meta_dict = load_clip_asset(p_name, target_clip_id)
+        out_latent = pack_av_latent(video, audio)
+
+        project_dir = get_project_dir(p_name)
+        clip_dir = os.path.join(project_dir, target_clip_id)
+
+        try:
+            import folder_paths
+            base_dir = folder_paths.get_output_directory()
+            subfolder = os.path.relpath(clip_dir, base_dir)
+        except Exception:
+            subfolder = ""
+
+        # UI Preview: show tail_frame or preview.png
+        preview_file = "tail_frame.png" if os.path.isfile(os.path.join(clip_dir, "tail_frame.png")) else "preview.png"
+        ui_images = [{
+            "filename": preview_file,
+            "subfolder": subfolder,
+            "type": "output"
+        }]
+
+        prompt_str = meta_dict.get("prompt", "")
+        frames = meta_dict.get("frames", latent_steps_to_pixel_frames(video.shape[2]))
+        logger.info("[Clip Bin Picker] Loaded clip '%s' (%s frames | ⭐%s | tag: '%s')",
+                    target_clip_id, frames, meta_dict.get("rating", 3), meta_dict.get("shot_tag", ""))
+
+        return {
+            "ui": {"images": ui_images},
+            "result": (out_latent, tail_tensor, first_tensor, prompt_str, target_clip_id)
+        }
+
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
@@ -855,6 +1131,8 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
     "MiniMaxSaveLatent": MiniMaxSaveLatentNode,
     "MiniMaxLoadLatent": MiniMaxLoadLatentNode,
+    "MiniMaxClipBinSaver": MiniMaxClipBinSaverNode,
+    "MiniMaxClipBinPicker": MiniMaxClipBinPickerNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -866,4 +1144,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
     "MiniMaxSaveLatent": "MiniMax H3 Save AV Latent (Standalone)",
     "MiniMaxLoadLatent": "MiniMax H3 Load AV Latent (Standalone)",
+    "MiniMaxClipBinSaver": "MiniMax H3 Clip Bin Saver (Media Pool)",
+    "MiniMaxClipBinPicker": "MiniMax H3 Clip Bin Picker (Gallery Loader)",
 }
+

@@ -199,6 +199,26 @@ class LongVideoSession:
                 self.last_rolling_frames, rolling_steps, start, start % 5
             )
 
+        # Branch A: Decoupled Pure Prefix Mode (Zero Timeline Overlap, Prompt-Aligned)
+        if self.config.is_decoupled_mode():
+            if tail_video is not None and not self.cache_manager.has_cache(0):
+                logger.info("[Decoupled Pure Prefix] Extracting pure prefix KV from previous clip tail...")
+                self.warmup_executor.precompute_rolling(
+                    model_patcher=model_patcher,
+                    prefix_video_latent=tail_video,
+                    prefix_audio_latent=tail_audio,
+                    text_context=text_context
+                )
+
+            # In decoupled mode, NEVER inject keyframes into timeline conditioning!
+            # The target timeline starts purely at t=0, fully aligned with user prompt.
+            updated_conditioning = conditioning
+            logger.info("[Decoupled Pure Prefix] Zero-overlap mode: timeline kept clean at t=0 (no minimax_keyframes injected).")
+
+            patched_model = self._attach_decoupled_hooks(model_patcher)
+            return patched_model, updated_conditioning
+
+        # Branch B: Standard In-Timeline Overlap (Safe Native / Step-1 Dynamic Cache)
         # Inject keyframes into conditioning payload with conflict resolution
         updated_conditioning = inject_minimax_keyframes(
             conditioning=conditioning,
@@ -216,6 +236,36 @@ class LongVideoSession:
             patched_model = model_patcher
 
         return patched_model, updated_conditioning
+
+    def _attach_decoupled_hooks(self, model_patcher: Any) -> Any:
+        """Injects Decoupled Pure Prefix Hook into model patcher's transformer_options."""
+        if hasattr(model_patcher, "clone"):
+            patched = model_patcher.clone()
+        else:
+            patched = model_patcher
+
+        opts = getattr(patched, "model_options", {}).copy()
+        transformer_options = opts.get("transformer_options", {}).copy()
+        transformer_options["minimax_prefix_mode"] = "decoupled_pure"
+
+        patches_replace = transformer_options.get("patches_replace", {}).copy()
+        dit_patches = patches_replace.get("dit", {}).copy()
+
+        new_hooks = create_prefix_dit_hook(
+            cache_manager=self.cache_manager,
+            model=getattr(patched, "model", patched),
+            is_anchor_warmup=False,
+            is_rolling_warmup=False
+        )
+        dit_patches.update(new_hooks)
+        patches_replace["dit"] = dit_patches
+        transformer_options["patches_replace"] = patches_replace
+
+        opts["transformer_options"] = transformer_options
+        if hasattr(patched, "model_options"):
+            patched.model_options = opts
+
+        return patched
 
     def _attach_denoise_hooks(self, model_patcher: Any) -> Any:
         """Injects Phase 1 Denoising Hook into model patcher's transformer_options."""
@@ -255,6 +305,18 @@ class LongVideoSession:
         trim_prefix: bool = True
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Registers a completed clip into session history and advances clip index."""
+        if self.config.is_decoupled_mode():
+            # In decoupled mode, generated clip is already 100% pure target without overlap frames
+            delivered_video = video_latent
+            delivered_audio = audio_latent
+            self.accumulated_video_latents.append(delivered_video)
+            if delivered_audio is not None:
+                self.accumulated_audio_latents.append(delivered_audio)
+            self.current_clip_index += 1
+            logger.info("Committed Decoupled Clip #%d (0 overlap frames). Total accumulated: %d",
+                        self.current_clip_index, len(self.accumulated_video_latents))
+            return delivered_video, delivered_audio
+
         rolling_steps = self.config.rolling_latent_frames if self.current_clip_index > 0 else 0
 
         delivered_video = trim_prefix_frames(video_latent, rolling_steps) if trim_prefix else video_latent

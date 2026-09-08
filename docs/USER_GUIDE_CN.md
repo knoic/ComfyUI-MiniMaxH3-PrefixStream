@@ -27,7 +27,7 @@
 
 | 参数项 | 可选值 / 默认值 | 推荐配置与说明 |
 | :--- | :--- | :--- |
-| **`cache_mode`** | `Safe Native (Zero Artifacts, Recommended)`<br>`Step-1 Dynamic Cache (Experimental Acceleration)`<br>*(默认 `Safe Native`)* | **模式选择与防闪烁核心**：<br>- `Safe Native`（推荐）：采用 100% 原生 ComfyUI Attention 机制，结合时空网格对齐与关键帧去重，**从数学底层彻底杜绝第 0 帧双重 Latent 冲突导致的剧烈闪烁、抽搐与色偏**，画质与原生生成 100% 一致。<br>- `Step-1 Dynamic Cache`：在线动态提取静态条件帧 KV 缓存以提供加速，并自动排除动态文本 Prompt 避免色调漂移。 |
+| **`cache_mode`** | `Safe Native (Zero Artifacts, Recommended)`<br>`Step-1 Dynamic Cache (Experimental Acceleration)`<br>`Decoupled Pure Prefix (Zero Overlap, Prompt-Aligned)`<br>*(默认 `Safe Native`)* | **模式选择与时空解耦核心**：<br>- `Safe Native`（推荐）：采用 100% 原生 ComfyUI Attention 机制，结合时空网格对齐与关键帧去重，**从数学底层彻底杜绝第 0 帧双重 Latent 冲突导致的剧烈闪烁、抽搐与色偏**，画质与原生生成 100% 一致。<br>- `Step-1 Dynamic Cache`：在线动态提取静态条件帧 KV 缓存以提供加速，并自动排除动态文本 Prompt 避免色调漂移。<br>- `Decoupled Pure Prefix`（**终极时空解耦与提示词绝对对齐**）：彻底移除时间轴上的前置重叠帧，前缀仅作为**纯外部只读 KV Cache** 注入 DiT 各层 Attention。**新视频生成严格从 t=0 起跑，用户提示词开头的动作 100% 精准对应新视频的第 0 秒**，免裁切、零去噪拉扯，彻底切断质量衰减链并额外节省约 18%~22% 采样耗时！ |
 | **`cache_dtype`** | `fp8` / `bf16` / `fp16`<br>*(默认 `fp8`)* | **强烈推荐 `fp8`**（在 24GB 显卡如 RTX 3090/4090 上，50 层 KV 显存占用从 7.8GB 骤降至 **~3.9GB**，肉眼画质无损）；若使用 48GB+ 专业显卡（A100/H100），可直接选 `bf16`。 |
 | **`device_mode`** | `auto` / `gpu` / `cpu_pinned`<br>*(默认 `auto`)* | - `auto`：系统空闲显存 > 16GB 时走 GPU 常驻；显存不足时自动降级到 CPU 锁页内存。<br>- `gpu`：速度最快，全驻留显存。<br>- `cpu_pinned`：**零 GPU 显存增量**，通过异步 CUDA Stream 随层预取，杜绝爆显存。 |
 | **`rolling_frames`** | `22` / `5` / `39` / `56` / `73` / `90` / `107` / `124`<br>*(默认 `22`)* | **动态滑动近景窗口（真实物理帧数，严格遵循 VAE 网格）**。默认 **22 帧**（在 24fps 下刚好约 **0.92 秒**，对应 7 步 Latent，起始起点对齐 cycle position 0），负责平滑传承上一段末尾的速度矢量、肢体动势与光照渐变。 |
@@ -83,6 +83,26 @@
 
 ### 7. `MiniMax Load AV Latent`（独立联合音画 Latent 加载节点）
 加载历史切片的联合音画 Latent，支持指定切片索引（如加载第 1 段用于为第 2 段提供 Rolling 上下文），或自动载入最新生成的切片文件。
+
+---
+
+### 8. `MiniMax H3 Clip Bin Saver`（素材箱智能归档节点 - 告别文件盲盒）
+**【非线性剪辑素材库体系】** 针对“事后根本不知道哪一个 Latent 对应哪一个视频”设计的全新工程化媒体池归档节点：
+- **核心能力**：
+  - **自包含资产打包**：保存潜变量的同时，若连接了 `images`（来自 `VAEDecode`），自动截取**第 0 帧（角色锚点）**与**末尾交接帧**，生成高质首尾双联预览图 `preview.png` 与单帧卡片。在操作系统文件夹中直接大图可见！
+  - **星标与分镜打标**：支持设置 `rating`（⭐1~5 星打分）与 `shot_tag`（如“雨夜拔刀”、“Take 2”），方便事后批量过滤废案。
+  - **双向血缘与视频索引**：支持记录关联的 MP4 视频文件名 `video_file_name` 与父镜头 ID `parent_clip_id`，彻底告别错位。
+  - **UI 即时预览**：节点执行后，直接在 ComfyUI 画布节点面板上渲染出首尾双联预览大图！
+
+---
+
+### 9. `MiniMax H3 Clip Bin Picker`（素材箱画廊选择器 - 零显存末帧即显）
+**【可视化镜头挑选与接力】** 彻底废除手动打字与翻找序号的传统方式：
+- **核心能力**：
+  - **多维筛选与工程管理**：支持按项目 `project_name` 分组管理，支持按星级快速过滤（如只看 `⭐⭐⭐⭐+ (4+ ⭐)`），一键屏蔽废片。
+  - **自动接力模式**：输入 `latest`（默认），自动选用本工程中最新符合星级标准的优质镜头，配合批处理队列实现全自动链式生成。
+  - **零显存末帧即显 (`tail_frame`)**：直接输出上一段视频的最后一帧图像（`IMAGE` 端口），并在节点表面即时展示！**创作者无需再次消耗显存调用 VAE 解码器**，即可一眼核对续写起点画面，并可直接把该图片拉给后续节点作参考图！
+
 
 ---
 

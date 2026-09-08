@@ -71,6 +71,23 @@ class TemporalCursorTracker:
         """Get 1D temporal coordinate tensor for n steps."""
         return video_t_grid(n_steps, origin)
 
+    def get_decoupled_coords(
+        self,
+        prefix_steps: int,
+        target_steps: int,
+        base_origin: float = 0.0
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Calculates perfectly contiguous, non-negative 3D-RoPE temporal coordinates.
+
+        Prefix spans [base_origin, base_origin + prefix_span).
+        Target generation seamlessly continues at [base_origin + prefix_span, ...).
+        Zero overlap on target timeline while preserving full temporal causality (Δt > 0).
+        """
+        prefix_coords = video_t_grid(prefix_steps, origin=base_origin)
+        target_origin = base_origin + total_span_for_steps(prefix_steps)
+        target_coords = video_t_grid(target_steps, origin=target_origin)
+        return prefix_coords, target_coords
+
     def reset(self):
         self.current_origin = 0.0
         self.clip_history.clear()

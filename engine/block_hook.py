@@ -274,8 +274,57 @@ def _make_block_patch(
                     logger.warning("[Prefix KV Cache] Step %d fallback in layer %d: %s", cache_manager.step_counter, layer_idx, err)
                     return attn_mod(h_in, rope_freqs=rope_freqs, transformer_options=transformer_options)
 
+        # -------------------------------------------------------------
+        # Mode: Decoupled Pure Prefix Mode (Zero Timeline Overlap, Pure Target Q)
+        # -------------------------------------------------------------
+        if mode == "decoupled_pure":
+            if layer_idx == 0:
+                cache_manager.step_counter += 1
+
+            # If no cached prefix KV exists (e.g. clip 1 with no predecessor), pass through natively
+            if not cache_manager.has_cache(layer_idx):
+                return block_wrap(args)
+
+            next_layer = layer_idx + 1
+            device = args["img"].device if "img" in args and hasattr(args["img"], "device") else torch.device("cpu")
+            cache_manager.prefetch_next_layer(next_layer, device)
+
+            def decoupled_pure_attention(h_in, rope_freqs=None, transformer_options={}):
+                try:
+                    s = h_in.shape[0]
+                    q, k_target, v_target = attn_mod.qkv_proj(h_in).split(attn_mod.heads * attn_mod.head_dim, dim=-1)
+                    q, k_target, v_target = _apply_rope_and_norm(attn_mod, q, k_target, v_target, rope_freqs)
+
+                    # Fetch cached invariant prefix condition KV (from previous clip tail)
+                    k_prefix, v_prefix = cache_manager.get_combined_kv(
+                        layer_idx=layer_idx,
+                        target_device=q.device,
+                        compute_dtype=q.dtype
+                    )
+
+                    if k_prefix is not None and v_prefix is not None:
+                        # Prepend prefix KV to target KV
+                        k_total = torch.cat([k_prefix, k_target], dim=2)
+                        v_total = torch.cat([v_prefix, v_target], dim=2)
+                    else:
+                        k_total = k_target
+                        v_total = v_target
+
+                    # Asymmetric attention: Q has length S_target, KV has length S_prefix + S_target
+                    out = asymmetric_cached_attention(
+                        q=q,
+                        k_cached=k_total,
+                        v_cached=v_total,
+                        num_heads=attn_mod.heads,
+                        transformer_options=transformer_options
+                    )
+                    return attn_mod.out_proj(out)
+                except Exception as err:
+                    logger.warning("[Decoupled Prefix Cache] Step %d fallback in layer %d: %s", cache_manager.step_counter, layer_idx, err)
+                    return attn_mod(h_in, rope_freqs=rope_freqs, transformer_options=transformer_options)
+
             args_with_attn = dict(args)
-            args_with_attn["attention"] = cached_target_attention
+            args_with_attn["attention"] = decoupled_pure_attention
             return block_wrap(args_with_attn)
 
         # -------------------------------------------------------------

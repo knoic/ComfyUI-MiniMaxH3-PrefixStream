@@ -14,6 +14,8 @@ try:
         MiniMaxCacheMonitorNode,
         MiniMaxSaveLatentNode,
         MiniMaxLoadLatentNode,
+        MiniMaxClipBinSaverNode,
+        MiniMaxClipBinPickerNode,
         NODE_CLASS_MAPPINGS,
         NODE_DISPLAY_NAME_MAPPINGS,
     )
@@ -26,6 +28,8 @@ except (ImportError, ValueError):
         MiniMaxCacheMonitorNode,
         MiniMaxSaveLatentNode,
         MiniMaxLoadLatentNode,
+        MiniMaxClipBinSaverNode,
+        MiniMaxClipBinPickerNode,
         NODE_CLASS_MAPPINGS,
         NODE_DISPLAY_NAME_MAPPINGS,
     )
@@ -38,6 +42,9 @@ __all__ = [
     "MiniMaxCacheMonitorNode",
     "MiniMaxSaveLatentNode",
     "MiniMaxLoadLatentNode",
+    "MiniMaxClipBinSaverNode",
+    "MiniMaxClipBinPickerNode",
     "NODE_CLASS_MAPPINGS",
     "NODE_DISPLAY_NAME_MAPPINGS",
 ]
+
