@@ -1,0 +1,267 @@
+/* MiniMax H3 Project Clip Bin - Non-Linear Timeline & Media Pool Widget */
+
+.minimax-clip-bin-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    background: #14161d;
+    border: 1px solid #2d3343;
+    border-radius: 8px;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #e2e8f0;
+    user-select: none;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Header bar */
+.minimax-clip-bin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #232936;
+    padding-bottom: 6px;
+    margin-bottom: 8px;
+}
+
+.minimax-clip-bin-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #93c5fd;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.minimax-clip-bin-project-tag {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #38bdf8;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.minimax-clip-bin-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.minimax-clip-bin-refresh-btn {
+    background: #1e293b;
+    border: 1px solid #475569;
+    color: #cbd5e1;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.minimax-clip-bin-refresh-btn:hover {
+    background: #334155;
+    color: #ffffff;
+    border-color: #60a5fa;
+    transform: scale(1.02);
+}
+
+/* Horizontal card deck scroll view */
+.minimax-clip-bin-deck {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 10px;
+    padding: 4px 2px 10px 2px;
+    scroll-behavior: smooth;
+}
+
+.minimax-clip-bin-deck::-webkit-scrollbar {
+    height: 6px;
+}
+
+.minimax-clip-bin-deck::-webkit-scrollbar-track {
+    background: #0f172a;
+    border-radius: 3px;
+}
+
+.minimax-clip-bin-deck::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+}
+
+.minimax-clip-bin-deck::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+
+/* Individual Clip Card */
+.minimax-clip-card {
+    flex: 0 0 150px;
+    width: 150px;
+    background: #1a1e29;
+    border: 1.5px solid #2d3748;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.minimax-clip-card:hover {
+    border-color: #60a5fa;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(96, 165, 250, 0.25);
+}
+
+.minimax-clip-card.active {
+    border-color: #10b981;
+    background: #142823;
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.45);
+}
+
+/* Auto / Initial Special Card */
+.minimax-clip-card.auto-card {
+    background: linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%);
+    border-color: #6366f1;
+}
+
+.minimax-clip-card.auto-card.active {
+    border-color: #818cf8;
+    box-shadow: 0 0 14px rgba(99, 102, 241, 0.5);
+}
+
+/* Card Preview / Thumbnail */
+.minimax-clip-thumb-wrap {
+    width: 100%;
+    height: 85px;
+    background: #090d16;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.minimax-clip-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.minimax-clip-thumb-placeholder {
+    font-size: 24px;
+    color: #475569;
+}
+
+/* Active Badge */
+.minimax-clip-active-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: #10b981;
+    color: #ffffff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+
+.minimax-clip-card.auto-card .minimax-clip-active-badge {
+    background: #6366f1;
+}
+
+/* Card Details Body */
+.minimax-clip-body {
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+/* Rating Stars */
+.minimax-clip-rating {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    font-size: 11px;
+    color: #eab308;
+}
+
+.minimax-clip-star {
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.minimax-clip-star:hover {
+    transform: scale(1.25);
+}
+
+.minimax-clip-star.empty {
+    color: #475569;
+}
+
+/* Shot Tag Name */
+.minimax-clip-shot-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: #f1f5f9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Metrics: Frames & Duration */
+.minimax-clip-metrics {
+    font-size: 10px;
+    color: #94a3b8;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* Lineage Branching */
+.minimax-clip-lineage {
+    font-size: 9px;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+    padding: 1px 4px;
+    border-radius: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+/* Footer status bar */
+.minimax-clip-bin-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid #232936;
+    padding-top: 6px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.minimax-clip-bin-selection-info {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.minimax-clip-bin-selected-target {
+    color: #34d399;
+    font-weight: 600;
+    font-family: monospace;
+}

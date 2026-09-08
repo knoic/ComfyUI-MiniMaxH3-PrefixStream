@@ -38,6 +38,18 @@ except (ImportError, ValueError):
         NODE_DISPLAY_NAME_MAPPINGS,
     )
 
+try:
+    from .engine.clip_bin_api import register_clip_bin_routes
+    register_clip_bin_routes()
+except Exception:
+    try:
+        from engine.clip_bin_api import register_clip_bin_routes
+        register_clip_bin_routes()
+    except Exception:
+        pass
+
+WEB_DIRECTORY = "./web"
+
 __all__ = [
     "MiniMaxPrefixCacheConfigNode",
     "MiniMaxPrefixCacheApplierNode",
@@ -52,6 +64,7 @@ __all__ = [
     "MiniMaxSafeVAEDecodeAudioNode",
     "NODE_CLASS_MAPPINGS",
     "NODE_DISPLAY_NAME_MAPPINGS",
+    "WEB_DIRECTORY",
 ]
 
 

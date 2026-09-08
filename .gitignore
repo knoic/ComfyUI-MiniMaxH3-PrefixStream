@@ -46,3 +46,6 @@ Thumbs.db
 *adapted*.json
 *user*.json
 
+# Output directories
+output/
+
