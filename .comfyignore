@@ -1,0 +1,9 @@
+.git
+.github
+__pycache__
+*.py[cod]
+output/
+tests/
+.vscode/
+.idea/
+*.log

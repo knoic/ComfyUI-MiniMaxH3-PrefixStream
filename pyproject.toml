@@ -1,0 +1,18 @@
+[project]
+name = "comfyui-minimaxh3-prefixstream"
+version = "1.0.0"
+description = "ComfyUI MiniMax H3 native masked AV continuation and streaming suite for long video generation."
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.1.0",
+    "safetensors>=0.4.0"
+]
+
+[project.urls]
+Repository = "https://github.com/knoic/ComfyUI-MiniMaxH3-PrefixStream"
+
+[tool.comfy]
+PublisherId = "knoic"
+DisplayName = "ComfyUI-MiniMaxH3-PrefixStream"
+Icon = ""
