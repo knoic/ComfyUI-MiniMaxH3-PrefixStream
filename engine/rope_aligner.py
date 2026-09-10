@@ -1,7 +1,7 @@
-"""3D-RoPE Coordinate Alignment & Temporal Cursor Manager for MiniMax H3.
+"""3D-RoPE Coordinate Alignment & Temporal Cursor Manager for MiniMax H3 (Reference).
 
-Ensures that Anchor, Rolling Context, and Target generation tokens have
-mathematically consistent 3D spatio-temporal rotary embeddings across continuous clips.
+Provides continuous temporal coordinate grid computation and temporal tracking
+for MiniMax H3 spatio-temporal alignment.
 """
 
 from typing import List, Tuple

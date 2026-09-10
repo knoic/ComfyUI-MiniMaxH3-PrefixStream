@@ -9,7 +9,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 from engine.clip_bin_manager import save_clip_asset, get_project_dir
-from engine.clip_bin_api import get_project_clips_api, update_clip_rating_api, register_clip_bin_routes
+from engine.clip_bin_api import (
+    get_project_clips_api,
+    update_clip_rating_api,
+    delete_clip_api,
+    rescan_project_api,
+    register_clip_bin_routes,
+)
 
 
 class TestClipBinAPI(unittest.TestCase):
@@ -30,9 +36,9 @@ class TestClipBinAPI(unittest.TestCase):
         self.assertEqual(len(data["clips"]), 0)
 
     def test_get_project_clips_api_with_assets_and_ratings(self):
-        video = torch.randn(1, 16, 32, 88, 160)
-        audio = torch.randn(1, 8, 32, 64)
-        images = torch.rand(4, 720, 1280, 3)
+        video = torch.randn(1, 16, 7, 32, 32)
+        audio = torch.randn(1, 8, 2, 16)
+        images = torch.rand(4, 64, 64, 3)
 
         # 1. Save clip 1
         meta1, clip_dir1, _ = save_clip_asset(
@@ -75,6 +81,17 @@ class TestClipBinAPI(unittest.TestCase):
         data_after = get_project_clips_api(self.project_name)
         clip1_after = next(c for c in data_after["clips"] if c["clip_id"] == meta1.clip_id)
         self.assertEqual(clip1_after["rating"], 5)
+
+        # Test rescan API
+        rescan_data = rescan_project_api(self.project_name)
+        self.assertEqual(rescan_data["total_clips"], 2)
+
+        # Test delete clip API
+        del_success = delete_clip_api(self.project_name, meta2.clip_id)
+        self.assertTrue(del_success)
+        data_after_del = get_project_clips_api(self.project_name)
+        self.assertEqual(data_after_del["total_clips"], 1)
+        self.assertEqual(data_after_del["clips"][0]["clip_id"], meta1.clip_id)
 
     def test_register_routes_safe_without_server(self):
         # Should execute cleanly without raising exception even when server is absent

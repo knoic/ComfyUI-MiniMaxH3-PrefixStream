@@ -18,6 +18,7 @@ from .clip_bin_manager import (
     load_project_index,
     save_project_index,
     rebuild_project_index,
+    delete_clip_asset,
     VIDEO_EXTENSIONS,
     resolve_source_video_path,
 )
@@ -135,6 +136,18 @@ def update_clip_rating_api(project_name: str, clip_id: str, new_rating: int) -> 
     return updated
 
 
+
+def delete_clip_api(project_name: str, clip_id: str) -> bool:
+    """Deletes a clip asset from both disk and project index."""
+    return delete_clip_asset(project_name, clip_id)
+
+
+def rescan_project_api(project_name: str) -> Dict[str, Any]:
+    """Forces rebuild of project index from filesystem and returns updated clip data."""
+    p_name = (project_name or "Default_Project").strip()
+    rebuild_project_index(p_name)
+    return get_project_clips_api(p_name)
+
 def register_clip_bin_routes() -> None:
     """Registers API routes into ComfyUI's PromptServer if running inside ComfyUI."""
     try:
@@ -168,6 +181,29 @@ def register_clip_bin_routes() -> None:
                 return web.json_response({"success": False, "error": "Missing clip_id"}, status=400)
             success = update_clip_rating_api(project, clip_id, rating)
             return web.json_response({"success": success})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
+    @routes.post("/minimax/clip_bin/delete")
+    async def handle_delete_clip(request):
+        try:
+            body = await request.json()
+            project = body.get("project", "Default_Project")
+            clip_id = body.get("clip_id")
+            if not clip_id:
+                return web.json_response({"success": False, "error": "Missing clip_id"}, status=400)
+            success = delete_clip_api(project, clip_id)
+            return web.json_response({"success": success})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
+    @routes.post("/minimax/clip_bin/rescan")
+    async def handle_rescan_project(request):
+        try:
+            body = await request.json()
+            project = body.get("project", "Default_Project")
+            data = rescan_project_api(project)
+            return web.json_response({"success": True, "data": data})
         except Exception as e:
             return web.json_response({"success": False, "error": str(e)}, status=500)
 

@@ -223,9 +223,14 @@ def tensor_to_pil(tensor_img: torch.Tensor) -> Image.Image:
     H, W = tensor_img.shape[0], tensor_img.shape[1]
     byte_tensor = tensor_img.detach().clamp(0, 1).mul(255).to(torch.uint8).contiguous().cpu()
     if np is not None:
-        return Image.fromarray(byte_tensor.numpy())
-    else:
-        return Image.frombytes("RGB", (W, H), bytes(bytearray(byte_tensor.view(-1).tolist())))
+        try:
+            return Image.fromarray(byte_tensor.numpy())
+        except Exception:
+            pass
+    raw_bytes = bytes(byte_tensor.untyped_storage())
+    channels = byte_tensor.shape[-1] if byte_tensor.ndim == 3 else 1
+    mode = "RGBA" if channels == 4 else ("L" if channels == 1 else "RGB")
+    return Image.frombytes(mode, (W, H), raw_bytes)
 
 
 def pil_to_tensor(pil_img: Image.Image) -> torch.Tensor:
@@ -691,3 +696,37 @@ def get_clips_for_selection(project_name: str, min_rating: int = 1) -> List[Tupl
         if c.get("rating", 3) >= min_rating:
             results.append((format_clip_label(c), c.get("clip_id", "")))
     return results
+
+
+def delete_clip_asset(project_name: str, clip_id: str) -> bool:
+    """Safely deletes a clip asset directory and removes it from the project index."""
+    p_name = (project_name or "Default_Project").strip()
+    c_id = (clip_id or "").strip()
+    if not c_id:
+        return False
+
+    project_dir = get_project_dir(p_name)
+    clip_dir = os.path.join(project_dir, c_id)
+    deleted = False
+
+    if os.path.isdir(clip_dir):
+        try:
+            shutil.rmtree(clip_dir, ignore_errors=True)
+            deleted = True
+            logger.info("[Clip Bin] Deleted clip asset directory '%s'", clip_dir)
+        except Exception as e:
+            logger.error("[Clip Bin] Failed to delete clip directory '%s': %s", clip_dir, e)
+            return False
+
+    # Update index
+    idx = load_project_index(p_name)
+    existing = idx.get("clips", [])
+    new_clips = [c for c in existing if c.get("clip_id") != c_id]
+    if len(new_clips) != len(existing) or deleted:
+        idx["clips"] = new_clips
+        idx["total_clips"] = len(new_clips)
+        idx["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_project_index(p_name, idx)
+        return True
+
+    return False

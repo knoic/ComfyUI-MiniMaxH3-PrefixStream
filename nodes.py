@@ -471,7 +471,15 @@ class MiniMaxTrimPrefixLatentNode:
                 # Strictly respect session: 0 for initial clip, >0 for continuation clips
                 actual_trim_frames = session.last_rolling_frames
             elif cache_config is not None:
-                actual_trim_frames = cache_config.rolling_frames
+                # Protect initial clip from accidental trimming when session is not connected:
+                # Only continuation clips contain 'noise_mask' in target_latent
+                target_latent = latent if latent is not None else video_latent
+                has_noise_mask = bool(target_latent is not None and isinstance(target_latent, dict) and "noise_mask" in target_latent)
+                if has_noise_mask:
+                    actual_trim_frames = cache_config.rolling_frames
+                else:
+                    logger.info("[Trim AV] No session connected and no noise_mask in latent; preserving full initial clip (0 trim frames).")
+                    actual_trim_frames = 0
 
 
         # 2. Pixel & audio waveform trimming (Golden Standard)
@@ -522,8 +530,9 @@ class MiniMaxTrimPrefixLatentNode:
                     trimmed_v = v
                 trimmed_a = None
                 if a_from_latent is not None:
-                    if trim_steps > 0 and v.shape[2] > 0:
-                        audio_trim_steps = int(round(trim_steps * (a_from_latent.shape[-1] / v.shape[2])))
+                    if trim_steps > 0:
+                        eff_frames = actual_trim_frames if actual_trim_frames > 0 else latent_steps_to_pixel_frames(trim_steps)
+                        audio_trim_steps = min(int(round(eff_frames * 40.0 / 24.0)), a_from_latent.shape[-1])
                         trimmed_a = trim_audio_latents(a_from_latent, audio_trim_steps)
                     else:
                         trimmed_a = a_from_latent
@@ -537,6 +546,124 @@ class MiniMaxTrimPrefixLatentNode:
             out_audio = audio
 
         return (out_images, out_audio, out_latent)
+
+
+
+class MiniMaxLongVideoStitcherNode:
+    """Seamlessly stitches previous long video and current newly generated clip in pixel & waveform space.
+
+    Applies:
+    1. Zero-VAE-distortion pixel-space joining with luminance gain matching and smooth cosine S-curve crossfade.
+    2. Waveform-space sample-accurate audio concatenation with equal-power crossfade (zero click/pop).
+    3. Handles initial clip mode gracefully when prev_images or prev_audio is empty or None.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "trim_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 192, "step": 1,
+                    "tooltip": "当前片段在缝合前需要裁切的前缀帧数。设为 0 时若连接了 session/config 将自动获取"
+                }),
+                "crossfade_frames": ("INT", {
+                    "default": 4, "min": 0, "max": 30, "step": 1,
+                    "tooltip": "画面重叠接缝处的余弦 S 曲线混合平滑过渡帧数 (推荐 2~6 帧)"
+                }),
+                "luminance_match": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "自动检测并平滑纠正前后片段的全局亮度色差，杜绝接缝闪光"
+                }),
+                "luminance_fade_frames": ("INT", {
+                    "default": 16, "min": 1, "max": 60, "step": 1,
+                    "tooltip": "亮度增益向原生亮度平滑回退过渡的帧数"
+                }),
+                "crossfade_ms": ("FLOAT", {
+                    "default": 15.0, "min": 0.0, "max": 500.0, "step": 1.0,
+                    "tooltip": "音频等功率交叉淡化时长 (毫秒)，彻底消除接缝爆音 (Click/Pop)"
+                }),
+                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
+            },
+            "optional": {
+                "prev_images": ("IMAGE", {"tooltip": "前置已累积的长视频画面。首段生成时可留空"}),
+                "curr_images": ("IMAGE", {"tooltip": "当前生成的片段画面 (来自 VAEDecode 或 TrimPrefix)"}),
+                "prev_audio": ("AUDIO", {"tooltip": "前置已累积的音频流。首段生成时可留空"}),
+                "curr_audio": ("AUDIO", {"tooltip": "当前生成的音频流 (来自 VAEDecodeAudio 或 TrimPrefix)"}),
+                "session": ("MINIMAX_SESSION",),
+                "cache_config": ("MINIMAX_CACHE_CONFIG",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT")
+    RETURN_NAMES = ("stitched_images", "stitched_audio", "total_frames")
+    FUNCTION = "stitch"
+    CATEGORY = "MiniMaxH3/PrefixStream"
+
+    def stitch(
+        self,
+        trim_frames: int = 0,
+        crossfade_frames: int = 4,
+        luminance_match: bool = True,
+        luminance_fade_frames: int = 16,
+        crossfade_ms: float = 15.0,
+        fps: float = 24.0,
+        prev_images: Optional[torch.Tensor] = None,
+        curr_images: Optional[torch.Tensor] = None,
+        prev_audio: Optional[Dict[str, Any]] = None,
+        curr_audio: Optional[Dict[str, Any]] = None,
+        session: Optional[LongVideoSession] = None,
+        cache_config: Optional[KVCacheConfig] = None,
+        **kwargs
+    ) -> Tuple[Optional[torch.Tensor], Optional[Dict[str, Any]], int]:
+        # Determine trim frames for curr_images/audio
+        actual_trim_frames = trim_frames
+        if actual_trim_frames <= 0:
+            if session is not None:
+                actual_trim_frames = session.last_rolling_frames
+            elif cache_config is not None and prev_images is not None and prev_images.shape[0] > 0:
+                actual_trim_frames = cache_config.rolling_frames
+
+        # Standardize inputs
+        prev_img_std = _standardize_image_tensor(prev_images)
+        curr_img_std = _standardize_image_tensor(curr_images)
+        prev_aud_std = _standardize_audio_dict(prev_audio)
+        curr_aud_std = _standardize_audio_dict(curr_audio)
+
+        out_images = None
+        if curr_img_std is not None and curr_img_std.shape[0] > 0:
+            out_images = stitch_video_images(
+                prev_images=prev_img_std,
+                curr_images=curr_img_std,
+                trim_frames=actual_trim_frames,
+                crossfade_frames=crossfade_frames,
+                luminance_match=luminance_match,
+                luminance_fade_frames=luminance_fade_frames,
+            )
+        elif prev_img_std is not None:
+            out_images = prev_img_std
+        else:
+            out_images = torch.empty((0, 768, 1344, 3), dtype=torch.float32)
+
+        curr_total_f = curr_img_std.shape[0] if curr_img_std is not None else 0
+        out_audio = None
+        if curr_aud_std is not None:
+            out_audio = stitch_audio_waveforms(
+                prev_audio=prev_aud_std,
+                curr_audio=curr_aud_std,
+                curr_total_frames=curr_total_f,
+                trim_frames=actual_trim_frames,
+                crossfade_ms=crossfade_ms,
+                fps=fps,
+            )
+        else:
+            out_audio = prev_aud_std
+
+        total_f = int(out_images.shape[0]) if out_images is not None else 0
+        logger.info(
+            "[Long Video Stitcher] Seamlessly stitched. Total video: %d frames (~%.2fs).",
+            total_f, total_f / float(fps)
+        )
+        return (out_images, out_audio, total_f)
 
 
 class MiniMaxCacheMonitorNode:
@@ -1105,6 +1232,7 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
     "MiniMaxTrimPrefix": MiniMaxTrimPrefixLatentNode,
     "MiniMaxTrimPrefixLatent": MiniMaxTrimPrefixLatentNode,
+    "MiniMaxLongVideoStitcher": MiniMaxLongVideoStitcherNode,
     "MiniMaxCacheMonitor": MiniMaxCacheMonitorNode,
     "MiniMaxSaveLatent": MiniMaxSaveLatentNode,
     "MiniMaxLoadLatent": MiniMaxLoadLatentNode,
@@ -1119,6 +1247,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxPrefixCacheApplier": "MiniMax H3 Continuation Applier",
     "MiniMaxTrimPrefix": "MiniMax H3 Trim Prefix (AV Master, Zero Flicker)",
     "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (AV Master)",
+    "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher (AV Seamless)",
     "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
     "MiniMaxSaveLatent": "MiniMax H3 Save AV Latent (Standalone)",
     "MiniMaxLoadLatent": "MiniMax H3 Load AV Latent (Standalone)",

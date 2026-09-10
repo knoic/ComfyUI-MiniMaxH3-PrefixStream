@@ -1,8 +1,7 @@
-"""Asymmetric Fused Cross/Self Attention for Prefix KV Caching.
+"""Asymmetric Fused Cross/Self Attention for Prefix KV Caching (Experimental).
 
-Executes Attn(Q_target, [K_prefix, K_target], [V_prefix, V_target]) with
-support for PyTorch SDPA (FlashAttention / Memory-Efficient Attention / Math)
-and ComfyUI AttentionTensorContainer.
+NOTE: Reference implementation for asymmetric attention in Prefix KV caching exploration.
+Current production workflows use Native Masked AV without DiT monkey-patching.
 """
 
 from typing import Optional, Dict, Any

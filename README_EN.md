@@ -73,6 +73,7 @@ Target empty AV latent ───────────────┼──►
 | **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | Selects default `Native Masked AV` or fallback `Safe Native`, and sets the user-visible video context length. |
 | **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | Builds native video/audio masks and outputs `masked_latent`; applies collision-safe keyframe conditioning in fallback mode. |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, avoiding VAE causal flicker while retaining sync. |
+| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly stitches accumulated long video and new clips in pixel and audio waveform space with luminance matching and equal-power crossfade. |
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Saves joint audiovisual latents to safetensors without external dependencies. |
 | **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Loads joint audiovisual latents and their metadata for multi-clip continuous streaming. |
 | **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | Archives a generated clip with its preview, rating, shot tag, prompt, and continuation lineage. |
@@ -101,10 +102,7 @@ Restart ComfyUI. The nodes appear under `MiniMaxH3/PrefixStream`.
 Verify the project locally:
 
 ```bash
-python tests/test_cache_manager.py
-python tests/test_fused_attention.py
-python tests/test_nodes_and_pipeline.py
-python tests/test_native_masked_av.py
+python -m unittest discover -s tests -v
 ```
 
 ---

@@ -218,7 +218,8 @@ class LongVideoSession:
         self.accumulated_video_latents.append(delivered_video)
 
         if audio_latent is not None:
-            audio_steps = int(rolling_steps * 1.6) if trim_prefix else 0
+            frames = latent_steps_to_pixel_frames(rolling_steps)
+            audio_steps = int(round(frames * 40.0 / 24.0)) if trim_prefix else 0
             delivered_audio = audio_latent[..., audio_steps:] if audio_steps > 0 else audio_latent
             self.accumulated_audio_latents.append(delivered_audio)
         else:

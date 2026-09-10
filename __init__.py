@@ -5,6 +5,7 @@ try:
         MiniMaxPrefixCacheConfigNode,
         MiniMaxPrefixCacheApplierNode,
         MiniMaxTrimPrefixLatentNode,
+        MiniMaxLongVideoStitcherNode,
         MiniMaxCacheMonitorNode,
         MiniMaxSaveLatentNode,
         MiniMaxLoadLatentNode,
@@ -20,6 +21,7 @@ except (ImportError, ValueError):
         MiniMaxPrefixCacheConfigNode,
         MiniMaxPrefixCacheApplierNode,
         MiniMaxTrimPrefixLatentNode,
+        MiniMaxLongVideoStitcherNode,
         MiniMaxCacheMonitorNode,
         MiniMaxSaveLatentNode,
         MiniMaxLoadLatentNode,
@@ -47,6 +49,7 @@ __all__ = [
     "MiniMaxPrefixCacheConfigNode",
     "MiniMaxPrefixCacheApplierNode",
     "MiniMaxTrimPrefixLatentNode",
+    "MiniMaxLongVideoStitcherNode",
     "MiniMaxCacheMonitorNode",
     "MiniMaxSaveLatentNode",
     "MiniMaxLoadLatentNode",
@@ -58,5 +61,3 @@ __all__ = [
     "NODE_DISPLAY_NAME_MAPPINGS",
     "WEB_DIRECTORY",
 ]
-
-

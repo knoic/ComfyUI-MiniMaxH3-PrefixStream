@@ -1,7 +1,12 @@
-"""Prefix KV Cache Manager for MiniMax H3 (50-layer DiT).
+"""Prefix KV Cache Manager for MiniMax H3.
 
-Provides memory-efficient storage, quantization (FP8/BF16), dual-tier caching
-(Anchor + Rolling), and asynchronous CPU-pinned memory streaming.
+NOTE ON ARCHITECTURE:
+Dual-tier Prefix KV Caching (Anchor + Rolling) was the initial DiT exploration.
+The current production pipeline adopts ComfyUI Native Masked AV (PR #15375) and Safe Native
+conditioning to achieve zero-patch, highly stable continuation without modifying DiT attention blocks.
+This module provides the core temporal grid alignment utilities (snap_to_run_grid,
+pixel_frames_to_latent_steps, latent_steps_to_pixel_frames) and retains the KV Cache manager
+as a reference implementation.
 """
 
 from dataclasses import dataclass

@@ -583,3 +583,76 @@
     color: #ffffff;
 }
 
+
+
+/* Rescan button */
+.minimax-clip-bin-rescan-btn {
+    background: #1e293b;
+    border: 1px solid #475569;
+    color: #94a3b8;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.minimax-clip-bin-rescan-btn:hover {
+    background: #334155;
+    color: #38bdf8;
+    border-color: #38bdf8;
+}
+
+/* Card delete button */
+.minimax-clip-delete-btn {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 20px;
+    height: 20px;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 4px;
+    color: #ef4444;
+    font-size: 11px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.15s ease;
+    padding: 0;
+    z-index: 10;
+}
+
+.minimax-clip-card:hover .minimax-clip-delete-btn {
+    opacity: 0.85;
+}
+
+.minimax-clip-delete-btn:hover {
+    opacity: 1 !important;
+    background: #dc2626;
+    color: #ffffff;
+    border-color: #ef4444;
+    transform: scale(1.1);
+}
+
+/* Modal delete button */
+.minimax-modal-delete-btn {
+    background: #7f1d1d;
+    border: 1px solid #dc2626;
+    color: #fca5a5;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-right: auto;
+}
+
+.minimax-modal-delete-btn:hover {
+    background: #dc2626;
+    color: #ffffff;
+}

@@ -84,8 +84,33 @@ function setupClipBinPickerWidget(node) {
 
     const refreshBtn = document.createElement("button");
     refreshBtn.className = "minimax-clip-bin-refresh-btn";
-    refreshBtn.innerText = "🔄 刷新素材库";
+    refreshBtn.innerText = "🔄 刷新";
+    refreshBtn.title = "重新读取素材库列表";
     actionsWrap.appendChild(refreshBtn);
+
+    const rescanBtn = document.createElement("button");
+    rescanBtn.className = "minimax-clip-bin-rescan-btn";
+    rescanBtn.innerText = "🔍 重建索引";
+    rescanBtn.title = "重新扫描磁盘目录并修复素材库索引";
+    rescanBtn.onclick = async (e) => {
+        e.stopPropagation();
+        rescanBtn.disabled = true;
+        rescanBtn.innerText = "扫描中...";
+        try {
+            await api.fetchApi("/minimax/clip_bin/rescan", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ project: projectWidget?.value || "Default_Project" })
+            });
+            await loadClips();
+        } catch (err) {
+            console.error("[Clip Bin] Failed to rescan:", err);
+        } finally {
+            rescanBtn.disabled = false;
+            rescanBtn.innerText = "🔍 重建索引";
+        }
+    };
+    actionsWrap.appendChild(rescanBtn);
 
     header.appendChild(titleWrap);
     header.appendChild(actionsWrap);
@@ -125,7 +150,7 @@ function setupClipBinPickerWidget(node) {
     }
 
     // Function to render stars
-    function renderStars(rating, clipId, projectName) {
+    function renderStars(rating, clipId, projectName, onRated) {
         const starWrap = document.createElement("div");
         starWrap.className = "minimax-clip-rating";
         for (let i = 1; i <= 5; i++) {
@@ -142,7 +167,15 @@ function setupClipBinPickerWidget(node) {
                         body: JSON.stringify({ project: projectName, clip_id: clipId, rating: i })
                     });
                     if (resp.ok) {
-                        loadClips();
+                        const stars = starWrap.querySelectorAll(".minimax-clip-star");
+                        stars.forEach((s, idx) => {
+                            if (idx + 1 <= i) {
+                                s.className = "minimax-clip-star filled";
+                            } else {
+                                s.className = "minimax-clip-star empty";
+                            }
+                        });
+                        onRated?.(i);
                     }
                 } catch (err) {
                     console.error("[Clip Bin] Failed to update rating:", err);
@@ -253,6 +286,28 @@ function setupClipBinPickerWidget(node) {
         closeBtn.innerText = "关闭";
         closeBtn.onclick = closeModal;
 
+        const modalDelBtn = document.createElement("button");
+        modalDelBtn.className = "minimax-modal-delete-btn";
+        modalDelBtn.innerHTML = "🗑️ 删除镜头";
+        modalDelBtn.onclick = async () => {
+            const ok = confirm(`确定彻底删除镜头 "${clip.shot_tag || clip.clip_id}" 及其所有媒体文件吗？\n此操作无法撤销。`);
+            if (!ok) return;
+            try {
+                const resp = await api.fetchApi("/minimax/clip_bin/delete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ project: projectName, clip_id: clip.clip_id })
+                });
+                if (resp.ok) {
+                    closeModal();
+                    loadClips();
+                }
+            } catch (err) {
+                console.error("[Clip Bin] Modal failed to delete clip:", err);
+            }
+        };
+
+        mFooter.appendChild(modalDelBtn);
         mFooter.appendChild(selectBtn);
         mFooter.appendChild(closeBtn);
 
@@ -440,12 +495,47 @@ function setupClipBinPickerWidget(node) {
                     }
                     card.appendChild(thumbWrap);
 
+                    // Delete button on card
+                    const delBtn = document.createElement("button");
+                    delBtn.className = "minimax-clip-delete-btn";
+                    delBtn.innerHTML = "✕";
+                    delBtn.title = "删除该镜头及磁盘文件";
+                    delBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        const ok = confirm(`确定彻底删除镜头 "${clip.shot_tag || clip.clip_id}" 及其媒体文件吗？\n此操作无法撤销。`);
+                        if (!ok) return;
+                        try {
+                            const resp = await api.fetchApi("/minimax/clip_bin/delete", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ project: currentProject, clip_id: clip.clip_id })
+                            });
+                            if (resp.ok) {
+                                card.style.opacity = "0";
+                                card.style.transform = "scale(0.8)";
+                                setTimeout(() => {
+                                    card.remove();
+                                    if (currentSelection === clip.clip_id && selectionWidget) {
+                                        selectionWidget.value = "latest";
+                                        selectionWidget.callback?.(selectionWidget.value);
+                                        updateSelectionDisplay("latest");
+                                    }
+                                }, 200);
+                            }
+                        } catch (err) {
+                            console.error("[Clip Bin] Failed to delete clip:", err);
+                        }
+                    };
+                    thumbWrap.appendChild(delBtn);
+
                     // Body
                     const body = document.createElement("div");
                     body.className = "minimax-clip-body";
 
-                    // Stars
-                    body.appendChild(renderStars(clip.rating || 3, clip.clip_id, currentProject));
+                    // Stars (in-place update without rebuilding deck)
+                    body.appendChild(renderStars(clip.rating || 3, clip.clip_id, currentProject, (newR) => {
+                        clip.rating = newR;
+                    }));
 
                     // Shot tag
                     const shotName = document.createElement("div");
