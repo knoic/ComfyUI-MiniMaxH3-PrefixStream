@@ -134,6 +134,19 @@ class MiniMaxPrefixCacheConfigNode:
                     "default": "39",
                     "tooltip": "用户可见的视频续写上下文帧数。39 帧约 1.625 秒；较长选项会自动下取整到精确音视频公共边界。"
                 }),
+            },
+            "optional": {
+                "audio_tail_carryover": ([
+                    "Match Video Handover",
+                    "Full Previous Tail"
+                ], {
+                    "default": "Match Video Handover",
+                    "tooltip": "Match Video Handover 保证音频保护区与视频严格 100% 对齐（杜绝 0.7s 重音复读与累积音画失步）；Full Previous Tail 保留上一段完整尾部音频。"
+                }),
+                "audio_feather_ticks": ("INT", {
+                    "default": 2, "min": 0, "max": 16, "step": 1,
+                    "tooltip": "音频掩码交界处的平滑余弦过渡步数（40Hz Latent 周期，推荐 2~4 步，杜绝 SDE/DiT 掩码跳变爆音）"
+                }),
             }
         }
 
@@ -146,6 +159,8 @@ class MiniMaxPrefixCacheConfigNode:
         self,
         cache_mode: str = "Native Masked AV (Recommended)",
         continuation_frames: Any = "39",
+        audio_tail_carryover: str = "Match Video Handover",
+        audio_feather_ticks: int = 2,
         **kwargs
     ) -> Tuple[KVCacheConfig]:
         # Accept a saved legacy rolling_frames value if an old workflow sends it.
@@ -157,7 +172,9 @@ class MiniMaxPrefixCacheConfigNode:
 
         config = KVCacheConfig(
             cache_mode=cache_mode,
-            rolling_frames=r_frames
+            rolling_frames=r_frames,
+            audio_tail_carryover=audio_tail_carryover,
+            audio_feather_ticks=int(audio_feather_ticks)
         )
         return (config,)
 
@@ -383,6 +400,9 @@ class MiniMaxPrefixCacheApplierNode:
                 target_video.shape[2], latent_steps_to_pixel_frames(target_video.shape[2]),
             )
             _require_native_masked_av_support()
+            carryover_mode = legacy.get("audio_tail_carryover", getattr(cfg, "audio_tail_carryover", "Match Video Handover"))
+            feather_ticks = int(legacy.get("audio_feather_ticks", getattr(cfg, "audio_feather_ticks", 2)))
+            sess.is_current_clip_trimmed = False
             try:
                 out_v, out_a, video_mask, audio_mask, plan = apply_native_masked_av(
                     target_video=target_video,
@@ -390,8 +410,8 @@ class MiniMaxPrefixCacheApplierNode:
                     source_video=v_ctx,
                     source_audio=a_ctx_from_latent,
                     context_frames=cfg.rolling_frames,
-                    audio_tail_carryover="Full Previous Tail",
-                    audio_feather_ticks=0,
+                    audio_tail_carryover=carryover_mode,
+                    audio_feather_ticks=feather_ticks,
                 )
             except ValueError as exc:
                 geometry_errors = (
@@ -509,6 +529,9 @@ class MiniMaxTrimPrefixLatentNode:
                 head = max(0, round(actual_trim_frames / fps * sr))
                 out_audio = dict(normalized, waveform=normalized["waveform"][..., head:])
 
+        if actual_trim_frames > 0 and session is not None:
+            session.is_current_clip_trimmed = True
+
         # 3. Latent trimming (fallback / passthrough)
         out_latent = None
         target_latent = latent if latent is not None else video_latent
@@ -619,7 +642,13 @@ class MiniMaxLongVideoStitcherNode:
         # Determine trim frames for curr_images/audio
         actual_trim_frames = trim_frames
         if actual_trim_frames <= 0:
-            if session is not None:
+            if session is not None and getattr(session, "is_current_clip_trimmed", False):
+                logger.info(
+                    "[Long Video Stitcher] Input clip was already trimmed upstream by MiniMaxTrimPrefixLatent. "
+                    "Skipping duplicate trimming (0 trim frames) to prevent audio/video loss."
+                )
+                actual_trim_frames = 0
+            elif session is not None:
                 actual_trim_frames = session.last_rolling_frames
             elif cache_config is not None and prev_images is not None and prev_images.shape[0] > 0:
                 actual_trim_frames = cache_config.rolling_frames
@@ -1051,6 +1080,13 @@ class MiniMaxClipBinPickerNode:
                     "default": "",
                     "tooltip": "【自定义物理路径覆盖】可选高级选项。填入绝对路径可直接载入任意磁盘目录下的 Clip Bin 镜头文件夹"
                 }),
+                "view_mode": ([
+                    "Deck (卡片流)",
+                    "Tree (关系树)"
+                ], {
+                    "default": "Deck (卡片流)",
+                    "tooltip": "【界面展现模式】卡片横向滚动流 或 分支血缘拓扑树（亦可在节点界面顶部一键切换）"
+                }),
             }
         }
 
@@ -1067,6 +1103,7 @@ class MiniMaxClipBinPickerNode:
         filter_rating: str = "All (1-5 ⭐)",
         clip_selection: str = "latest",
         custom_clip_path: str = "",
+        view_mode: str = "Deck (卡片流)",
         **kwargs
     ) -> Dict[str, Any]:
         p_name = (project_name or "Default_Project").strip()
@@ -1135,6 +1172,32 @@ class MiniMaxClipBinPickerNode:
             "ui": {"images": []},
             "result": (out_latent, tail_tensor, first_tensor, prompt_str, target_clip_id)
         }
+
+
+
+
+class MiniMaxClipBinTreePickerNode(MiniMaxClipBinPickerNode):
+    """Visual Tree & DAG Lineage Graph Picker for MiniMax Clip Bin.
+    
+    Identical pipeline compatibility with MiniMaxClipBinPickerNode, but defaults to
+    an interactive branching DAG tree view for exploring non-linear story branches.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        types = super().INPUT_TYPES()
+        import copy
+        types = copy.deepcopy(types)
+        types["optional"]["view_mode"] = ([
+            "Tree (关系树)",
+            "Deck (卡片流)"
+        ], {
+            "default": "Tree (关系树)",
+            "tooltip": "【界面展现模式】分支血缘拓扑树 或 卡片横向滚动流（亦可在节点界面顶部一键切换）"
+        })
+        return types
+
+    CATEGORY = "MiniMaxH3/ClipBin"
 
 
 class MiniMaxSafeVAEDecodeNode:
@@ -1238,6 +1301,7 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxLoadLatent": MiniMaxLoadLatentNode,
     "MiniMaxClipBinSaver": MiniMaxClipBinSaverNode,
     "MiniMaxClipBinPicker": MiniMaxClipBinPickerNode,
+    "MiniMaxClipBinTreePicker": MiniMaxClipBinTreePickerNode,
     "MiniMaxSafeVAEDecode": MiniMaxSafeVAEDecodeNode,
     "MiniMaxSafeVAEDecodeAudio": MiniMaxSafeVAEDecodeAudioNode,
 }
@@ -1254,6 +1318,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxLoadLatent": "MiniMax H3 Load AV Latent (Standalone)",
     "MiniMaxClipBinSaver": "MiniMax H3 Clip Bin Saver (Media Pool)",
     "MiniMaxClipBinPicker": "MiniMax H3 Clip Bin Picker (Gallery Loader)",
+    "MiniMaxClipBinTreePicker": "MiniMax H3 Clip Bin Tree Picker (Lineage Graph)",
     "MiniMaxSafeVAEDecode": "MiniMax H3 Safe VAE Decode (Video)",
     "MiniMaxSafeVAEDecodeAudio": "MiniMax H3 Safe VAE Decode (Audio)",
 }

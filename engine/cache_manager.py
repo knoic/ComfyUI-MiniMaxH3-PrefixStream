@@ -68,6 +68,8 @@ class KVCacheConfig:
     rolling_frames: int = 39          # Protected video context for Native Masked AV
     anchor_frames: int = 5            # Real video frames for anchor (default 5 frames = 2 latent steps)
     temporal_stride: int = 1          # 1 = keep all, 2 = 2x temporal sub-sampling
+    audio_tail_carryover: str = "Match Video Handover"  # "Match Video Handover" or "Full Previous Tail"
+    audio_feather_ticks: int = 2                       # Smooth cosine mask transition ticks (40Hz audio latent)
 
     # Internal overrides / compatibility
     _rolling_latent_frames: Optional[int] = None

@@ -39,7 +39,7 @@ def audio_equal_power_crossfade(
 
 
 def fit_audio_length(waveform: torch.Tensor, target_samples: int) -> torch.Tensor:
-    """Pads or truncates audio waveform to exact target samples."""
+    """Pads or truncates audio waveform to exact target samples without DC plateaus."""
     target = max(0, int(target_samples))
     current = int(waveform.shape[-1])
     if current == target:
@@ -52,8 +52,20 @@ def fit_audio_length(waveform: torch.Tensor, target_samples: int) -> torch.Tenso
         shape = list(waveform.shape)
         shape[-1] = target
         return torch.zeros(shape, dtype=waveform.dtype, device=waveform.device)
-    pad = waveform[..., -1:].expand(*waveform.shape[:-1], target - current)
-    return torch.cat((waveform, pad), dim=-1)
+
+    # Micro fade-out on the tail of current waveform before zero padding to prevent DC clicks
+    fade_len = min(current, 32)
+    waveform = waveform.clone()
+    if fade_len > 0:
+        fade_curve = 0.5 + 0.5 * torch.cos(torch.linspace(0, math.pi, fade_len, device=waveform.device, dtype=waveform.dtype))
+        while fade_curve.ndim < waveform.ndim:
+            fade_curve = fade_curve.unsqueeze(0)
+        waveform[..., -fade_len:] = waveform[..., -fade_len:] * fade_curve
+
+    pad_shape = list(waveform.shape)
+    pad_shape[-1] = target - current
+    zero_pad = torch.zeros(pad_shape, dtype=waveform.dtype, device=waveform.device)
+    return torch.cat((waveform, zero_pad), dim=-1)
 
 
 def _rgb_luminance(images: torch.Tensor) -> torch.Tensor:
@@ -291,12 +303,18 @@ def stitch_audio_waveforms(
         prev_tail = prev_w[..., -c:]
         curr_overlap = curr_w[..., head_samples - c : head_samples]
 
-        t = torch.linspace(0.0, 1.0, c, dtype=prev_w.dtype, device=prev_w.device)
-        alpha = t.view(1, 1, c)
-        blended = prev_tail * (1.0 - alpha) + curr_overlap * alpha
+        # Equal-power cosine crossfade (preserves acoustic energy and mitigates phase cancellation)
+        t = torch.linspace(0.0, math.pi / 2, c, dtype=prev_w.dtype, device=prev_w.device)
+        fade_out = torch.cos(t)
+        fade_in = torch.sin(t)
+        while fade_out.ndim < prev_w.ndim:
+            fade_out = fade_out.unsqueeze(0)
+            fade_in = fade_in.unsqueeze(0)
+        blended = prev_tail * fade_out + curr_overlap * fade_in
 
         stitched = torch.cat([prev_w[..., :-c], blended, curr_body], dim=-1)
 
+    stitched = torch.clamp(stitched, -1.0, 1.0)
     return {"waveform": stitched, "sample_rate": sr}
 
 

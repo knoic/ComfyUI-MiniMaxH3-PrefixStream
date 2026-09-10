@@ -447,8 +447,11 @@ def encode_images_to_mp4(
                 if wf.ndim == 3:
                     wf = wf[0]
                 channels = wf.shape[0]
-                wf_pcm = wf.clamp(-1, 1).mul(32767).to(torch.int16).t().contiguous().cpu()
-                audio_bytes = bytes(wf_pcm.untyped_storage())
+                wf_pcm = wf.clamp(-1.0, 1.0).mul(32767.0).round().clamp(-32768, 32767).to(torch.int16).t().contiguous().cpu()
+                try:
+                    audio_bytes = wf_pcm.numpy().tobytes()
+                except Exception:
+                    audio_bytes = bytes(wf_pcm.untyped_storage())
 
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_f:
                     temp_wav_path = tmp_f.name

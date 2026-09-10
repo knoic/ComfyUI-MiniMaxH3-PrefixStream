@@ -148,6 +148,39 @@ class TestNodesAndPipeline(unittest.TestCase):
         self.assertIsNotNone(out_aud)
         self.assertIn("waveform", out_aud)
 
+    def test_clip_bin_tree_picker_node(self):
+        # 1. Verify existence and inheritance
+        self.assertIn("MiniMaxClipBinTreePicker", nodes.NODE_CLASS_MAPPINGS)
+        self.assertIn("MiniMaxClipBinTreePicker", nodes.NODE_DISPLAY_NAME_MAPPINGS)
+        tree_node = nodes.MiniMaxClipBinTreePickerNode()
+        picker_node = nodes.MiniMaxClipBinPickerNode()
+
+        # 2. Check input types and widget order
+        picker_types = picker_node.INPUT_TYPES()
+        tree_types = tree_node.INPUT_TYPES()
+
+        # Both must keep required fields identically ordered
+        self.assertEqual(list(picker_types["required"].keys()), ["project_name", "mode", "filter_rating", "clip_selection"])
+        self.assertEqual(list(tree_types["required"].keys()), ["project_name", "mode", "filter_rating", "clip_selection"])
+
+        # view_mode must be the last optional item
+        self.assertEqual(list(picker_types["optional"].keys())[-1], "view_mode")
+        self.assertEqual(list(tree_types["optional"].keys())[-1], "view_mode")
+
+        # Check default view_mode settings
+        self.assertEqual(picker_types["optional"]["view_mode"][1]["default"], "Deck (卡片流)")
+        self.assertEqual(tree_types["optional"]["view_mode"][1]["default"], "Tree (关系树)")
+
+        # 3. Test backward-compatibility: call without view_mode (as old workflow would)
+        res1 = picker_node.pick_clip(project_name="Test_Empty_Proj_1", mode="Auto (首段全新 / 后续自动接力)")
+        self.assertIn("result", res1)
+        self.assertEqual(res1["result"][4], "[INITIAL_GENERATION]")
+
+        # 4. Call tree picker with view_mode explicitly passed
+        res2 = tree_node.pick_clip(project_name="Test_Empty_Proj_2", mode="Auto (首段全新 / 后续自动接力)", view_mode="Tree (关系树)")
+        self.assertIn("result", res2)
+        self.assertEqual(res2["result"][4], "[INITIAL_GENERATION]")
+
     def test_workflow_graph_integrity(self):
         import json
         wf_file = os.path.join(_repo_dir, "examples", "MiniMaxH3_PrefixStream_v1.0.json")
