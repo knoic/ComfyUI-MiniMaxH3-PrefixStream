@@ -3,6 +3,8 @@
 import os
 import json
 import logging
+import asyncio
+from urllib.parse import urlencode
 from typing import Dict, Any, List
 
 logger = logging.getLogger("minimax_clip_bin_api")
@@ -14,6 +16,9 @@ except ImportError:
 
 from .clip_bin_manager import (
     get_project_dir,
+    get_clip_dir,
+    project_locked,
+    atomic_write_json,
     list_projects,
     load_project_index,
     save_project_index,
@@ -23,6 +28,7 @@ from .clip_bin_manager import (
     resolve_source_video_path,
 )
 
+@project_locked
 def get_project_clips_api(project_name: str) -> Dict[str, Any]:
     """Retrieves full clip metadata and relative thumbnail paths for the frontend."""
     p_name = (project_name or "Default_Project").strip()
@@ -35,7 +41,10 @@ def get_project_clips_api(project_name: str) -> Dict[str, Any]:
     enriched_clips = []
     for c in clips:
         clip_id = c.get("clip_id", "")
-        clip_dir = os.path.join(project_dir, clip_id)
+        try:
+            clip_dir = get_clip_dir(p_name, clip_id)
+        except ValueError:
+            continue
 
         # Determine relative subfolder for ComfyUI /view API
         try:
@@ -56,6 +65,8 @@ def get_project_clips_api(project_name: str) -> Dict[str, Any]:
 
         # Check existing video file (must have valid video extension)
         video_file = c.get("video_file", "")
+        if video_file and (os.path.basename(video_file) != video_file or "/" in video_file or "\\" in video_file):
+            video_file = ""
         if not video_file or not any(video_file.lower().endswith(e) for e in VIDEO_EXTENSIONS) or not os.path.isfile(os.path.join(clip_dir, video_file)):
             video_file = ""
             for v_cand in ["video.mp4", "video.webm"]:
@@ -87,12 +98,12 @@ def get_project_clips_api(project_name: str) -> Dict[str, Any]:
                             pass
 
         has_video = bool(video_file and os.path.isfile(os.path.join(clip_dir, video_file)))
-        video_url = f"/view?filename={video_file}&subfolder={subfolder}&type=output" if has_video else ""
+        video_url = "/view?" + urlencode({"filename": video_file, "subfolder": subfolder, "type": "output"}) if has_video else ""
 
         enriched = dict(c)
         enriched["thumbnail_file"] = preview_file
         enriched["subfolder"] = subfolder
-        enriched["thumbnail_url"] = f"/view?filename={preview_file}&subfolder={subfolder}&type=output" if preview_file else ""
+        enriched["thumbnail_url"] = "/view?" + urlencode({"filename": preview_file, "subfolder": subfolder, "type": "output"}) if preview_file else ""
         enriched["has_video"] = has_video
         enriched["video_file"] = video_file if has_video else ""
         enriched["video_url"] = video_url
@@ -106,9 +117,11 @@ def get_project_clips_api(project_name: str) -> Dict[str, Any]:
     }
 
 
+@project_locked
 def update_clip_rating_api(project_name: str, clip_id: str, new_rating: int) -> bool:
     """Updates the rating of a specific clip across both index and meta.json."""
     p_name = (project_name or "Default_Project").strip()
+    clip_dir = get_clip_dir(p_name, clip_id)
     rating = max(1, min(5, int(new_rating)))
     idx = load_project_index(p_name)
     updated = False
@@ -120,18 +133,17 @@ def update_clip_rating_api(project_name: str, clip_id: str, new_rating: int) -> 
             break
 
     if updated:
-        save_project_index(p_name, idx)
         # Also update clip's own meta.json
-        clip_meta_path = os.path.join(get_project_dir(p_name), clip_id, "meta.json")
+        clip_meta_path = os.path.join(clip_dir, "meta.json")
         if os.path.isfile(clip_meta_path):
             try:
                 with open(clip_meta_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
                 meta["rating"] = rating
-                with open(clip_meta_path, "w", encoding="utf-8") as f:
-                    json.dump(meta, f, indent=2, ensure_ascii=False)
+                atomic_write_json(clip_meta_path, meta)
             except Exception as e:
-                logger.warning("[Clip Bin API] Failed to update meta.json rating: %s", e)
+                raise RuntimeError("Failed to update clip rating metadata") from e
+        save_project_index(p_name, idx)
 
     return updated
 
@@ -167,7 +179,7 @@ def register_clip_bin_routes() -> None:
     @routes.get("/minimax/clip_bin/list")
     async def handle_list_clips(request):
         project = request.rel_url.query.get("project", "Default_Project")
-        data = get_project_clips_api(project)
+        data = await asyncio.to_thread(get_project_clips_api, project)
         return web.json_response(data)
 
     @routes.post("/minimax/clip_bin/rate")
@@ -179,10 +191,13 @@ def register_clip_bin_routes() -> None:
             rating = body.get("rating", 3)
             if not clip_id:
                 return web.json_response({"success": False, "error": "Missing clip_id"}, status=400)
-            success = update_clip_rating_api(project, clip_id, rating)
+            success = await asyncio.to_thread(update_clip_rating_api, project, clip_id, rating)
             return web.json_response({"success": success})
+        except (ValueError, TypeError) as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
         except Exception as e:
-            return web.json_response({"success": False, "error": str(e)}, status=500)
+            logger.exception("[Clip Bin API] Request failed")
+            return web.json_response({"success": False, "error": "Storage operation failed; see server log"}, status=500)
 
     @routes.post("/minimax/clip_bin/delete")
     async def handle_delete_clip(request):
@@ -192,19 +207,25 @@ def register_clip_bin_routes() -> None:
             clip_id = body.get("clip_id")
             if not clip_id:
                 return web.json_response({"success": False, "error": "Missing clip_id"}, status=400)
-            success = delete_clip_api(project, clip_id)
+            success = await asyncio.to_thread(delete_clip_api, project, clip_id)
             return web.json_response({"success": success})
+        except (ValueError, TypeError) as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
         except Exception as e:
-            return web.json_response({"success": False, "error": str(e)}, status=500)
+            logger.exception("[Clip Bin API] Request failed")
+            return web.json_response({"success": False, "error": "Storage operation failed; see server log"}, status=500)
 
     @routes.post("/minimax/clip_bin/rescan")
     async def handle_rescan_project(request):
         try:
             body = await request.json()
             project = body.get("project", "Default_Project")
-            data = rescan_project_api(project)
+            data = await asyncio.to_thread(rescan_project_api, project)
             return web.json_response({"success": True, "data": data})
+        except (ValueError, TypeError) as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
         except Exception as e:
-            return web.json_response({"success": False, "error": str(e)}, status=500)
+            logger.exception("[Clip Bin API] Request failed")
+            return web.json_response({"success": False, "error": "Storage operation failed; see server log"}, status=500)
 
     logger.info("[Clip Bin API] Successfully registered /minimax/clip_bin routes with PromptServer.")

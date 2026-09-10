@@ -2,7 +2,7 @@
 
 Provides:
 1. Pixel-space video stitching with luminance matching and cosine S-curve crossfade (zero VAE artifacts).
-2. Waveform-space audio stitching with sample-accurate alignment and equal-power crossfade (zero click/pop).
+2. Waveform-space audio stitching with sample-accurate alignment and linear overlap crossfade (zero click/pop).
 3. Synchronous frame & sample trimming for decoded IMAGE and AUDIO streams.
 4. Latent-space soft overlap blending (fallback / intermediate representation).
 """
@@ -276,7 +276,15 @@ def stitch_audio_waveforms(
         return {"waveform": curr_body, "sample_rate": sr}
 
     prev_w = prev_audio["waveform"]
+    if int(prev_audio.get("sample_rate", 32000)) != sr:
+        raise ValueError("Audio sample rates must match; resample clips before stitching")
+    if prev_w.shape[:-1] != curr_w.shape[:-1]:
+        raise ValueError("Audio batch size and channel count must match before stitching")
+    curr_w = curr_w.to(device=prev_w.device, dtype=prev_w.dtype)
+    curr_body = curr_body.to(device=prev_w.device, dtype=prev_w.dtype)
     c = min(int(round((crossfade_ms / 1000.0) * sr)), head_samples, prev_w.shape[-1])
+    if head_samples > curr_w.shape[-1]:
+        c = 0
     if c <= 0:
         stitched = torch.cat([prev_w, curr_body], dim=-1)
     else:
@@ -384,8 +392,6 @@ def trim_prefix_frames(
     """Trims the leading prefix/condition frames from the generated output."""
     if prefix_latent_steps <= 0:
         return full_video_latent
-    if prefix_latent_steps >= full_video_latent.shape[2]:
-        return full_video_latent
     return full_video_latent[:, :, prefix_latent_steps:]
 
 
@@ -395,8 +401,6 @@ def trim_audio_waveform(
 ) -> torch.Tensor:
     """Trims leading samples from audio waveform."""
     if trim_samples <= 0:
-        return waveform
-    if trim_samples >= waveform.shape[-1]:
         return waveform
     return waveform[..., trim_samples:]
 
@@ -408,7 +412,4 @@ def trim_audio_latents(
     """Trims leading overlap steps from a 4D audio latent [B, 32, 2, T]."""
     if prefix_audio_steps <= 0 or full_audio_latent is None:
         return full_audio_latent
-    if prefix_audio_steps >= full_audio_latent.shape[-1]:
-        return full_audio_latent
     return full_audio_latent[..., prefix_audio_steps:]
-

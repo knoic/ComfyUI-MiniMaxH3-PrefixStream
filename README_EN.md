@@ -73,7 +73,7 @@ Target empty AV latent ───────────────┼──►
 | **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | Selects default `Native Masked AV` or fallback `Safe Native`, and sets the user-visible video context length. |
 | **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | Builds native video/audio masks and outputs `masked_latent`; applies collision-safe keyframe conditioning in fallback mode. |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, avoiding VAE causal flicker while retaining sync. |
-| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly stitches accumulated long video and new clips in pixel and audio waveform space with luminance matching and equal-power crossfade. |
+| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly stitches accumulated long video and new clips in pixel and audio waveform space with luminance matching and linear audio overlap crossfade. |
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Saves joint audiovisual latents to safetensors without external dependencies. |
 | **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Loads joint audiovisual latents and their metadata for multi-clip continuous streaming. |
 | **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | Archives a generated clip with its preview, rating, shot tag, prompt, and continuation lineage. |
@@ -131,3 +131,10 @@ This project and its temporal continuation design were strongly inspired by the 
 ## License
 
 This project is released under the [MIT License](LICENSE).
+
+
+## Disk-backed long video output
+
+`MiniMax H3 Disk Video Stream` writes each decoded clip to disk and exports a final MP4 without accumulating the complete IMAGE timeline in RAM. FFmpeg must be on PATH. Connect only the current clip's images/audio and optionally its session to trim the prefix. Keep the project and stream names constant, and leave export disabled while appending. To export without appending again, disconnect images/audio and enable export on a node with the same names. Every execution with images appends another clip; use a new stream name for a new video.
+
+This path uses hard cuts, eight-frame encoding batches and PCM intermediate audio. All clips must have consistent fps, even resolution, sample rate, channels and audio presence. The existing IMAGE stitcher remains available for brightness matching and overlap blending, and still retains the full output in memory. Project locks protect concurrent operations within one ComfyUI process; do not share a writable bin between multiple processes. VAE decoding errors now propagate instead of producing empty results. Restart ComfyUI and refresh the browser after updating.

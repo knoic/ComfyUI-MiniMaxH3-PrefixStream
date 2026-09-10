@@ -180,3 +180,23 @@ MiniMax H3 在 ComfyUI 中使用联合 AV `LATENT` 封装视频和音频。续�
    - 感谢其在 MiniMax H3 关键帧锚定、VAE 时空相位网格对齐、音视频开头裁切及时间缩放方面的探索与启发。
 2. **[Herrgotts-H3-Infinite-Continuation-Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)** by **[@HerrgottMargott](https://github.com/HerrgottMargott)**
    - 感谢其在 Native Masked AV、精确音视频上下文边界和独立音频保护方面提供的思路。
+
+
+## 磁盘分段长视频（低内存）
+
+新增 `MiniMax H3 Disk Video Stream` 节点，依赖 PATH 中的 FFmpeg。
+
+1. 将当前片段解码后的 `images`、`audio` 接入该节点；可连接 `session` 自动裁切重叠前缀。如果输入已经过 Trim Prefix，请不连接 session，并保持 trim_frames=0，避免二次裁切。
+2. 同一作品保持相同的 `project_name` 和 `stream_name`。每次节点执行都会追加当前片段，首段和续写都只需传入当前片段，不需要累计 IMAGE。
+3. 生成期间保持 `export=False`。结束后使用同名节点，断开 images/audio，将 export=True，合成最终 MP4；该方式只导出，不重复追加末段。
+4. 输出包括 manifest_path（片段清单）、video_path（导出成功后有值）、total_frames。文件位于 output/minimax_h3_bins/<项目>/.streams/<流名称>/。
+5. 新作品使用新的 stream_name。相同名称会继续已有片段；重复排队相同画面也会追加一份。
+
+该节点采用硬切拼接，不提供跨片段亮度匹配或交叉淡化。需要这些效果时使用原 Long Video Stitcher；原节点输出完整 IMAGE，因此内存占用仍随总时长增长。磁盘模式仅保留当前解码片段，编码转换每批最多 8 帧，中间音频使用 PCM，导出时统一编码 AAC。所有片段必须保持相同帧率、偶数分辨率、采样率及声道数，且音频必须始终存在或始终省略。
+
+## 错误处理与存储约束
+
+- 音频拼接要求前后采样率及声道数一致，出现不一致时明确报错；请先通过上游节点转换。
+- Safe VAE Decode 对未连接的首段上下文仍返回空值；实际解码失败会停止并显示错误，不再伪装成空输出。
+- 素材目录不接受路径型 clip_id 或符号链接目录。索引采用同一 ComfyUI 进程内的项目级锁和原子替换；不要让多个 ComfyUI 进程同时写同一项目。
+- 更新后重启 ComfyUI，并在浏览器执行 Ctrl+F5 加载新版素材箱脚本。

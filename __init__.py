@@ -1,5 +1,7 @@
 """ComfyUI MiniMax H3 native masked AV continuation and streaming suite."""
 
+import logging
+
 try:
     from .nodes import (
         MiniMaxPrefixCacheConfigNode,
@@ -34,14 +36,13 @@ except (ImportError, ValueError):
     )
 
 try:
-    from .engine.clip_bin_api import register_clip_bin_routes
+    if __package__:
+        from .engine.clip_bin_api import register_clip_bin_routes
+    else:
+        from engine.clip_bin_api import register_clip_bin_routes
     register_clip_bin_routes()
 except Exception:
-    try:
-        from engine.clip_bin_api import register_clip_bin_routes
-        register_clip_bin_routes()
-    except Exception:
-        pass
+    logging.getLogger("minimax_prefix_stream").exception("Clip Bin route registration failed")
 
 WEB_DIRECTORY = "./web"
 

@@ -13,6 +13,12 @@ import { api } from "../../../scripts/api.js";
  * - Auto-refresh on generation completion.
  */
 
+function escapeHTML(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[char]);
+}
+
 // Inject CSS stylesheet into page header
 const styleId = "minimax-clip-bin-styles";
 if (!document.getElementById(styleId)) {
@@ -62,6 +68,7 @@ app.registerExtension({
 });
 
 function setupClipBinPickerWidget(node) {
+    let closeCurrentModal = null;
     // Find relevant widgets
     const projectWidget = node.widgets?.find(w => w.name === "project_name");
     const selectionWidget = node.widgets?.find(w => w.name === "clip_selection");
@@ -77,7 +84,7 @@ function setupClipBinPickerWidget(node) {
 
     const titleWrap = document.createElement("div");
     titleWrap.className = "minimax-clip-bin-title";
-    titleWrap.innerHTML = `🎞️ MiniMax Project Clip Bin: <span class="minimax-clip-bin-project-tag">${projectWidget?.value || "Default_Project"}</span>`;
+    titleWrap.innerHTML = `🎞️ MiniMax Project Clip Bin: <span class="minimax-clip-bin-project-tag">${escapeHTML(projectWidget?.value || "Default_Project")}</span>`;
 
     const actionsWrap = document.createElement("div");
     actionsWrap.className = "minimax-clip-bin-actions";
@@ -126,7 +133,7 @@ function setupClipBinPickerWidget(node) {
     footer.className = "minimax-clip-bin-footer";
     const selectionInfo = document.createElement("div");
     selectionInfo.className = "minimax-clip-bin-selection-info";
-    selectionInfo.innerHTML = `选中镜头: <span class="minimax-clip-bin-selected-target">${selectionWidget?.value || "latest"}</span>`;
+    selectionInfo.innerHTML = `选中镜头: <span class="minimax-clip-bin-selected-target">${escapeHTML(selectionWidget?.value || "latest")}</span>`;
 
     const hintText = document.createElement("div");
     hintText.innerText = "👉 点击卡片即可设为当前接力源";
@@ -166,7 +173,7 @@ function setupClipBinPickerWidget(node) {
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ project: projectName, clip_id: clipId, rating: i })
                     });
-                    if (resp.ok) {
+                    if (resp.ok && (await resp.json()).success) {
                         const stars = starWrap.querySelectorAll(".minimax-clip-star");
                         stars.forEach((s, idx) => {
                             if (idx + 1 <= i) {
@@ -189,7 +196,10 @@ function setupClipBinPickerWidget(node) {
     // Function to open full-featured audio/video modal preview
     function openVideoModal(clip, projectName) {
         const existing = document.getElementById("minimax-video-modal-overlay");
-        if (existing) existing.remove();
+        if (existing) {
+            existing.closePreview?.();
+            existing.remove();
+        }
 
         const overlay = document.createElement("div");
         overlay.id = "minimax-video-modal-overlay";
@@ -203,8 +213,8 @@ function setupClipBinPickerWidget(node) {
         mHeader.className = "minimax-modal-header";
         mHeader.innerHTML = `
             <div class="minimax-modal-title">
-                <span class="minimax-modal-shot-title">🎬 ${clip.shot_tag || "Shot"}</span>
-                <span class="minimax-modal-clip-id">${clip.clip_id}</span>
+                <span class="minimax-modal-shot-title">🎬 ${escapeHTML(clip.shot_tag || "Shot")}</span>
+                <span class="minimax-modal-clip-id">${escapeHTML(clip.clip_id)}</span>
             </div>
             <button class="minimax-modal-close-btn" title="关闭 (Esc)">✕</button>
         `;
@@ -229,15 +239,15 @@ function setupClipBinPickerWidget(node) {
             <div class="minimax-modal-meta-title">镜头属性看板</div>
             <div class="minimax-modal-row">
                 <span class="label">归属项目:</span>
-                <span class="value">${projectName}</span>
+                <span class="value">${escapeHTML(projectName)}</span>
             </div>
             <div class="minimax-modal-row">
                 <span class="label">规格参数:</span>
-                <span class="value">${clip.frames || 124} 帧 | ${clip.duration_seconds || 5.2} 秒 (${clip.fps || 24} fps)</span>
+                <span class="value">${escapeHTML(clip.frames || 124)} 帧 | ${escapeHTML(clip.duration_seconds || 5.2)} 秒 (${escapeHTML(clip.fps || 24)} fps)</span>
             </div>
             <div class="minimax-modal-row">
                 <span class="label">生成时间:</span>
-                <span class="value">${clip.created_at || "未知"}</span>
+                <span class="value">${escapeHTML(clip.created_at || "未知")}</span>
             </div>
             <div class="minimax-modal-row">
                 <span class="label">品质评级:</span>
@@ -246,12 +256,12 @@ function setupClipBinPickerWidget(node) {
             ${clip.parent_clip_id ? `
             <div class="minimax-modal-row">
                 <span class="label">父镜头血缘:</span>
-                <span class="value parent-link" title="${clip.parent_clip_id}">${clip.parent_clip_id}</span>
+                <span class="value parent-link" title="${escapeHTML(clip.parent_clip_id)}">${escapeHTML(clip.parent_clip_id)}</span>
             </div>` : ""}
             ${clip.prompt ? `
             <div class="minimax-modal-prompt-wrap">
                 <div class="label">正向描述词 (Prompt):</div>
-                <div class="prompt-content">${clip.prompt}</div>
+                <div class="prompt-content">${escapeHTML(clip.prompt)}</div>
             </div>` : ""}
         `;
 
@@ -298,7 +308,7 @@ function setupClipBinPickerWidget(node) {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ project: projectName, clip_id: clip.clip_id })
                 });
-                if (resp.ok) {
+                if (resp.ok && (await resp.json()).success) {
                     closeModal();
                     loadClips();
                 }
@@ -323,7 +333,10 @@ function setupClipBinPickerWidget(node) {
             overlay.classList.add("closing");
             setTimeout(() => overlay.remove(), 180);
             window.removeEventListener("keydown", onKeyDown);
+            closeCurrentModal = null;
         }
+        closeCurrentModal = closeModal;
+        overlay.closePreview = closeModal;
 
         function onKeyDown(e) {
             if (e.key === "Escape") {
@@ -339,18 +352,24 @@ function setupClipBinPickerWidget(node) {
     }
 
     // Function to load and render clips
+    let disposed = false;
+    let loadVersion = 0;
     async function loadClips() {
+        if (disposed) return;
+        const version = ++loadVersion;
         const currentProject = projectWidget?.value || "Default_Project";
         const currentSelection = (selectionWidget?.value || "latest").trim();
-        titleWrap.innerHTML = `🎞️ MiniMax Project Clip Bin: <span class="minimax-clip-bin-project-tag">${currentProject}</span>`;
+        titleWrap.innerHTML = `🎞️ MiniMax Project Clip Bin: <span class="minimax-clip-bin-project-tag">${escapeHTML(currentProject)}</span>`;
 
         try {
             const res = await api.fetchApi(`/minimax/clip_bin/list?project=${encodeURIComponent(currentProject)}`);
+            if (disposed || version !== loadVersion) return;
             if (!res.ok) {
                 deck.innerHTML = `<div style="padding: 10px; color: #94a3b8; font-size: 11px;">未连接到后台服务或素材库为空</div>`;
                 return;
             }
             const data = await res.json();
+            if (disposed || version !== loadVersion) return;
             const clips = data.clips || [];
 
             deck.innerHTML = "";
@@ -510,7 +529,7 @@ function setupClipBinPickerWidget(node) {
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ project: currentProject, clip_id: clip.clip_id })
                             });
-                            if (resp.ok) {
+                            if (resp.ok && (await resp.json()).success) {
                                 card.style.opacity = "0";
                                 card.style.transform = "scale(0.8)";
                                 setTimeout(() => {
@@ -547,7 +566,7 @@ function setupClipBinPickerWidget(node) {
                     // Metrics
                     const metrics = document.createElement("div");
                     metrics.className = "minimax-clip-metrics";
-                    metrics.innerHTML = `<span>${clip.frames || 124}帧</span><span>${clip.duration_seconds || 5.2}s</span>`;
+                    metrics.innerHTML = `<span>${escapeHTML(clip.frames || 124)}帧</span><span>${escapeHTML(clip.duration_seconds || 5.2)}s</span>`;
                     body.appendChild(metrics);
 
                     // Lineage / Parent
@@ -580,7 +599,7 @@ function setupClipBinPickerWidget(node) {
     }
 
     function updateSelectionDisplay(val) {
-        selectionInfo.innerHTML = `选中镜头: <span class="minimax-clip-bin-selected-target">${val}</span>`;
+        selectionInfo.innerHTML = `选中镜头: <span class="minimax-clip-bin-selected-target">${escapeHTML(val)}</span>`;
     }
 
     // Bind refresh button
@@ -624,15 +643,25 @@ function setupClipBinPickerWidget(node) {
     setTimeout(loadClips, 200);
 
     // Auto-refresh when generation execution finishes
-    api.addEventListener("executed", (e) => {
+    const onExecutedEvent = (e) => {
         if (e.detail?.node === String(node.id) || e.detail?.output?.ui?.images) {
             setTimeout(loadClips, 500);
         }
-    });
+    };
 
-    api.addEventListener("status", (e) => {
+    const onStatusEvent = (e) => {
         if (e.detail?.exec_info?.queue_remaining === 0) {
             setTimeout(loadClips, 600);
         }
-    });
+    };
+    api.addEventListener("executed", onExecutedEvent);
+    api.addEventListener("status", onStatusEvent);
+    const previousRemoved = node.onRemoved;
+    node.onRemoved = function () {
+        disposed = true;
+        closeCurrentModal?.();
+        api.removeEventListener("executed", onExecutedEvent);
+        api.removeEventListener("status", onStatusEvent);
+        return previousRemoved?.apply(this, arguments);
+    };
 }

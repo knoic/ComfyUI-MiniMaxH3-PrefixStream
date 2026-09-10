@@ -2,7 +2,7 @@
 
 Provides:
 - Self-contained clip asset packaging (Latent, First/Tail keyframes, Preview composite, Metadata).
-- Project indexing with fast in-memory caching and thread-safe atomic writes.
+- Project indexing with per-project thread locks and atomic JSON writes.
 - Rich search, filtering (star ratings, tags, timestamps), and lineage tracking.
 - Zero-VAE-cost image frame loading and placeholder generation.
 """
@@ -16,6 +16,9 @@ import shutil
 import subprocess
 import wave
 import tempfile
+import threading
+import inspect
+from functools import wraps
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
@@ -35,6 +38,53 @@ except ImportError:
     st_save = None
 
 logger = logging.getLogger("minimax_clip_bin")
+
+
+_project_locks = {}
+_project_locks_guard = threading.Lock()
+
+
+def project_locked(fn):
+    """Serialize each project's read-modify-write operations within ComfyUI."""
+    signature = inspect.signature(fn)
+
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        key = os.path.normcase(os.path.realpath(get_project_dir(bound.arguments["project_name"])))
+        with _project_locks_guard:
+            lock = _project_locks.setdefault(key, threading.RLock())
+        with lock:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def atomic_write_json(path, data):
+    """Publish a complete JSON file; preserve the old file on failure."""
+    fd, tmp = tempfile.mkstemp(prefix=".json_", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def get_clip_dir(project_name: str, clip_id: str) -> str:
+    """Only direct, non-linked asset directories are accepted."""
+    if not isinstance(clip_id, str) or not clip_id or clip_id in (".", ".."):
+        raise ValueError("Invalid clip_id")
+    if any(not (c.isalnum() or c in "_-") for c in clip_id):
+        raise ValueError("clip_id must be a directory identifier, not a path")
+    project = os.path.realpath(get_project_dir(project_name))
+    path = os.path.join(project, clip_id)
+    if os.path.normcase(os.path.realpath(path)) != os.path.normcase(path):
+        raise ValueError("Linked clip directories are not supported")
+    return path
 
 
 @dataclass
@@ -75,7 +125,10 @@ def get_project_dir(project_name: str) -> str:
     safe_name = "".join(c for c in (project_name or "Default_Project") if c.isalnum() or c in ("_", "-", " ")).strip()
     if not safe_name:
         safe_name = "Default_Project"
-    p_dir = os.path.join(get_base_bin_dir(), safe_name)
+    base = os.path.realpath(get_base_bin_dir())
+    p_dir = os.path.join(base, safe_name)
+    if os.path.normcase(os.path.realpath(p_dir)) != os.path.normcase(p_dir):
+        raise ValueError("Linked project directories are not supported")
     os.makedirs(p_dir, exist_ok=True)
     return p_dir
 
@@ -99,6 +152,7 @@ def _get_index_path(project_name: str) -> str:
     return os.path.join(get_project_dir(project_name), ".bin_index.json")
 
 
+@project_locked
 def load_project_index(project_name: str) -> Dict[str, Any]:
     """Loads the project index, auto-rebuilding if missing or corrupted."""
     idx_path = _get_index_path(project_name)
@@ -115,31 +169,14 @@ def load_project_index(project_name: str) -> Dict[str, Any]:
     return rebuild_project_index(project_name)
 
 
+@project_locked
 def save_project_index(project_name: str, index_data: Dict[str, Any]) -> None:
     """Saves project index atomically to prevent corruption."""
     idx_path = _get_index_path(project_name)
-    tmp_path = idx_path + f".tmp_{os.getpid()}_{int(time.time())}"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(index_data, f, indent=2, ensure_ascii=False)
-        if os.path.exists(idx_path):
-            try:
-                os.replace(tmp_path, idx_path)
-            except OSError:
-                # Windows fallback
-                os.remove(idx_path)
-                os.rename(tmp_path, idx_path)
-        else:
-            os.rename(tmp_path, idx_path)
-    except Exception as e:
-        logger.error("[Clip Bin] Failed to save index for '%s': %s", project_name, e)
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+    atomic_write_json(idx_path, index_data)
 
 
+@project_locked
 def rebuild_project_index(project_name: str) -> Dict[str, Any]:
     """Scans all subdirectories in a project directory and builds an updated index."""
     p_dir = get_project_dir(project_name)
@@ -148,6 +185,10 @@ def rebuild_project_index(project_name: str) -> Dict[str, Any]:
         for entry in os.listdir(p_dir):
             entry_path = os.path.join(p_dir, entry)
             if os.path.isdir(entry_path):
+                try:
+                    entry_path = get_clip_dir(project_name, entry)
+                except ValueError:
+                    continue
                 meta_path = os.path.join(entry_path, "meta.json")
                 if os.path.isfile(meta_path):
                     try:
@@ -198,6 +239,7 @@ def rebuild_project_index(project_name: str) -> Dict[str, Any]:
                                     except Exception:
                                         pass
 
+                        meta["clip_id"] = entry
                         clips.append(meta)
                     except Exception:
                         pass
@@ -383,11 +425,8 @@ def encode_images_to_mp4(
         H = H - (H % 2)
         images = images[:, :H, :W, :]
 
-    try:
-        raw_bytes = bytes(images.detach().clamp(0, 1).mul(255).to(torch.uint8).contiguous().cpu().untyped_storage())
-    except Exception as e:
-        logger.warning("[Clip Bin] Failed to extract raw image bytes for video encoding: %s", e)
-        return False
+    if images.shape[-1] not in (3, 4) or W < 2 or H < 2 or fps <= 0:
+        raise ValueError("Video encoding requires RGB/RGBA frames, dimensions >= 2, and positive fps")
 
     temp_wav_path = None
     cmd = [
@@ -419,7 +458,8 @@ def encode_images_to_mp4(
                     wav_file.setframerate(sr)
                     wav_file.writeframes(audio_bytes)
 
-                cmd.extend(["-i", temp_wav_path, "-c:a", "aac", "-b:a", "192k", "-shortest"])
+                audio_codec = ["-c:a", "pcm_s16le"] if output_mp4_path.endswith(".mkv") else ["-c:a", "aac", "-b:a", "192k"]
+                cmd.extend(["-i", temp_wav_path, *audio_codec, "-shortest"])
         except Exception as e:
             logger.warning("[Clip Bin] Audio preparation failed for video encoding: %s", e)
             if temp_wav_path and os.path.exists(temp_wav_path):
@@ -432,13 +472,33 @@ def encode_images_to_mp4(
     cmd.extend([
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        output_mp4_path
     ])
+    if not output_mp4_path.endswith(".mkv"):
+        cmd.extend(["-movflags", "+faststart"])
+    cmd.append(output_mp4_path)
 
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        proc.communicate(input=raw_bytes)
+        # Bound conversion memory to eight frames; stderr goes to disk to avoid pipe deadlock.
+        with tempfile.TemporaryFile() as errors:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
+            try:
+                for start in range(0, N, 8):
+                    chunk = images[start:start + 8, ..., :3].detach().clamp(0, 1).mul(255)
+                    chunk = chunk.to(device="cpu", dtype=torch.uint8).contiguous()
+                    proc.stdin.write(bytes(chunk.untyped_storage()))
+                proc.stdin.close()
+                proc.wait(timeout=120)
+            except BaseException:
+                try:
+                    proc.stdin.close()
+                finally:
+                    proc.kill()
+                    proc.wait()
+                raise
+            if proc.returncode:
+                errors.seek(0, os.SEEK_END)
+                errors.seek(max(0, errors.tell() - 4096))
+                logger.warning("[Clip Bin] ffmpeg: %s", errors.read().decode("utf-8", errors="replace"))
         success = proc.returncode == 0 and os.path.isfile(output_mp4_path) and os.path.getsize(output_mp4_path) > 0
         if success:
             logger.info("[Clip Bin] Successfully encoded video asset to '%s' (%s frames, %.2fs)",
@@ -457,6 +517,7 @@ def encode_images_to_mp4(
                 pass
 
 
+@project_locked
 def save_clip_asset(
     video_tensor: torch.Tensor,
     audio_tensor: Optional[torch.Tensor],
@@ -486,7 +547,7 @@ def save_clip_asset(
     clip_id = f"clip_{timestamp_str}_{tag_slug}"
 
     project_dir = get_project_dir(project_name)
-    clip_dir = os.path.join(project_dir, clip_id)
+    clip_dir = get_clip_dir(project_name, clip_id)
     os.makedirs(clip_dir, exist_ok=True)
 
     # 1. Save unified AV Latent
@@ -596,8 +657,7 @@ def save_clip_asset(
 
     # 4. Save meta.json
     meta_json_path = os.path.join(clip_dir, "meta.json")
-    with open(meta_json_path, "w", encoding="utf-8") as f:
-        json.dump(asdict(meta_obj), f, indent=2, ensure_ascii=False)
+    atomic_write_json(meta_json_path, asdict(meta_obj))
 
     # 4. Update project index
     idx = load_project_index(project_name)
@@ -613,6 +673,7 @@ def save_clip_asset(
     return meta_obj, clip_dir, preview_pil
 
 
+@project_locked
 def load_clip_asset(project_name: str, clip_id: str) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, Any]]:
     """Loads a clip asset completely from disk.
     
@@ -620,7 +681,7 @@ def load_clip_asset(project_name: str, clip_id: str) -> Tuple[torch.Tensor, Opti
         (video_tensor, audio_tensor, tail_frame_tensor, first_frame_tensor, meta_dict)
     """
     project_dir = get_project_dir(project_name)
-    clip_dir = os.path.join(project_dir, clip_id)
+    clip_dir = get_clip_dir(project_name, clip_id)
     if not os.path.isdir(clip_dir):
         raise FileNotFoundError(f"[Clip Bin] Asset directory not found: '{clip_dir}'")
 
@@ -698,6 +759,7 @@ def get_clips_for_selection(project_name: str, min_rating: int = 1) -> List[Tupl
     return results
 
 
+@project_locked
 def delete_clip_asset(project_name: str, clip_id: str) -> bool:
     """Safely deletes a clip asset directory and removes it from the project index."""
     p_name = (project_name or "Default_Project").strip()
@@ -706,12 +768,12 @@ def delete_clip_asset(project_name: str, clip_id: str) -> bool:
         return False
 
     project_dir = get_project_dir(p_name)
-    clip_dir = os.path.join(project_dir, c_id)
+    clip_dir = get_clip_dir(p_name, c_id)
     deleted = False
 
     if os.path.isdir(clip_dir):
         try:
-            shutil.rmtree(clip_dir, ignore_errors=True)
+            shutil.rmtree(clip_dir)
             deleted = True
             logger.info("[Clip Bin] Deleted clip asset directory '%s'", clip_dir)
         except Exception as e:

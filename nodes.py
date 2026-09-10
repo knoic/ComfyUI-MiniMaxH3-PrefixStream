@@ -35,6 +35,7 @@ try:
         latent_steps_to_pixel_frames,
     )
     from .pipeline.long_video_director import LongVideoSession
+    from .pipeline.disk_stream import MiniMaxDiskVideoStreamNode
     from .pipeline.native_masked_av import apply_native_masked_av
     from .pipeline.seam_protector import (
         audio_equal_power_crossfade,
@@ -71,6 +72,7 @@ except (ImportError, ValueError):
         latent_steps_to_pixel_frames,
     )
     from pipeline.long_video_director import LongVideoSession
+    from pipeline.disk_stream import MiniMaxDiskVideoStreamNode
     from pipeline.native_masked_av import apply_native_masked_av
     from pipeline.seam_protector import (
         audio_equal_power_crossfade,
@@ -168,6 +170,8 @@ def _unpack_latent(latent_dict: Optional[Dict[str, Any]]) -> Tuple[Optional[torc
     samples = latent_dict.get("samples")
     if samples is None:
         return None, None
+    if isinstance(samples, torch.Tensor) and not samples.is_nested:
+        return samples, None
     if hasattr(samples, "unbind"):
         parts = list(samples.unbind())
         v = parts[0]
@@ -400,6 +404,7 @@ class MiniMaxPrefixCacheApplierNode:
                 raise
             masked_latent = pack_av_latent(out_v, out_a, target_latent)
             masked_latent["noise_mask"] = _pack_nested_streams(video_mask, audio_mask)
+            masked_latent["minimax_prefix_frames"] = int(plan["actual_context_frames"])
             sess.last_rolling_steps = int(plan["context_steps"])
             sess.last_rolling_frames = int(plan["actual_context_frames"])
             out_cond = _drop_head_keyframes(conditioning, sess.last_rolling_frames)
@@ -476,7 +481,7 @@ class MiniMaxTrimPrefixLatentNode:
                 target_latent = latent if latent is not None else video_latent
                 has_noise_mask = bool(target_latent is not None and isinstance(target_latent, dict) and "noise_mask" in target_latent)
                 if has_noise_mask:
-                    actual_trim_frames = cache_config.rolling_frames
+                    actual_trim_frames = int(target_latent.get("minimax_prefix_frames", cache_config.rolling_frames))
                 else:
                     logger.info("[Trim AV] No session connected and no noise_mask in latent; preserving full initial clip (0 trim frames).")
                     actual_trim_frames = 0
@@ -498,14 +503,11 @@ class MiniMaxTrimPrefixLatentNode:
                 actual_trim_frames, out_images.shape[0], out_images.shape[0] / float(fps)
             )
         elif audio is not None:
-            dummy_images = torch.empty((int(round(actual_trim_frames + 1)), 1, 1, 3))
-            _, out_audio = trim_images_and_audio(
-                images=dummy_images,
-                audio=audio,
-                trim_frames=actual_trim_frames,
-                fps=fps,
-                match_tail=match_tail
-            )
+            normalized = _standardize_audio_dict(audio)
+            if normalized is not None:
+                sr = int(normalized.get("sample_rate", 32000))
+                head = max(0, round(actual_trim_frames / fps * sr))
+                out_audio = dict(normalized, waveform=normalized["waveform"][..., head:])
 
         # 3. Latent trimming (fallback / passthrough)
         out_latent = None
@@ -514,17 +516,13 @@ class MiniMaxTrimPrefixLatentNode:
             trim_steps = 0
             if actual_trim_frames > 0:
                 trim_steps = pixel_frames_to_latent_steps(actual_trim_frames)
-            elif session is not None and session.last_rolling_steps > 0:
-                trim_steps = session.last_rolling_steps
-            elif cache_config is not None:
-                trim_steps = cache_config.rolling_latent_frames
 
             v, a_from_latent = _unpack_latent(target_latent)
             if v is None:
                 v = target_latent.get("samples")
 
             if v is not None:
-                if trim_steps > 0 and trim_steps < v.shape[2]:
+                if trim_steps > 0:
                     trimmed_v = v[:, :, trim_steps:]
                 else:
                     trimmed_v = v
@@ -537,6 +535,9 @@ class MiniMaxTrimPrefixLatentNode:
                     else:
                         trimmed_a = a_from_latent
                 out_latent = pack_av_latent(trimmed_v, trimmed_a, original_dict=target_latent)
+                if trim_steps > 0:
+                    out_latent.pop("noise_mask", None)
+                    out_latent["minimax_prefix_frames"] = 0
             else:
                 out_latent = target_latent
 
@@ -554,7 +555,7 @@ class MiniMaxLongVideoStitcherNode:
 
     Applies:
     1. Zero-VAE-distortion pixel-space joining with luminance gain matching and smooth cosine S-curve crossfade.
-    2. Waveform-space sample-accurate audio concatenation with equal-power crossfade (zero click/pop).
+    2. Waveform-space sample-accurate audio concatenation with linear overlap crossfade (zero click/pop).
     3. Handles initial clip mode gracefully when prev_images or prev_audio is empty or None.
     """
 
@@ -580,7 +581,7 @@ class MiniMaxLongVideoStitcherNode:
                 }),
                 "crossfade_ms": ("FLOAT", {
                     "default": 15.0, "min": 0.0, "max": 500.0, "step": 1.0,
-                    "tooltip": "音频等功率交叉淡化时长 (毫秒)，彻底消除接缝爆音 (Click/Pop)"
+                    "tooltip": "音频重叠区线性交叉淡化时长 (毫秒)，彻底消除接缝爆音 (Click/Pop)"
                 }),
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
             },
@@ -1176,8 +1177,7 @@ class MiniMaxSafeVAEDecodeNode:
             images = _standardize_image_tensor(images)
             return (images,)
         except Exception as e:
-            logger.warning("[Safe VAE Decode] Failed to decode samples (%s), returning empty: %s", getattr(v, 'shape', None), e)
-            return (torch.empty((0, 768, 1344, 3), dtype=torch.float32),)
+            raise RuntimeError(f"Video VAE decode failed for shape {getattr(v, 'shape', None)}") from e
 
 
 class MiniMaxSafeVAEDecodeAudioNode:
@@ -1223,11 +1223,11 @@ class MiniMaxSafeVAEDecodeAudioNode:
             audio = _standardize_audio_dict(audio)
             return (audio,)
         except Exception as e:
-            logger.warning("[Safe VAE Decode Audio] Failed to decode audio (%s), returning None: %s", getattr(a, 'shape', None), e)
-            return (None,)
+            raise RuntimeError(f"Audio VAE decode failed for shape {getattr(a, 'shape', None)}") from e
 
 
 NODE_CLASS_MAPPINGS = {
+    "MiniMaxDiskVideoStream": MiniMaxDiskVideoStreamNode,
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
     "MiniMaxTrimPrefix": MiniMaxTrimPrefixLatentNode,
@@ -1243,6 +1243,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxDiskVideoStream": "MiniMax H3 Disk Video Stream",
     "MiniMaxPrefixCacheConfig": "MiniMax H3 Continuation Config",
     "MiniMaxPrefixCacheApplier": "MiniMax H3 Continuation Applier",
     "MiniMaxTrimPrefix": "MiniMax H3 Trim Prefix (AV Master, Zero Flicker)",
