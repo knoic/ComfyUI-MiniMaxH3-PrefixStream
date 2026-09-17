@@ -1551,11 +1551,7 @@ class MiniMaxVideoPatchReassemblerNode:
             raw_aud = edited_audio or (session.master_audio if session.master_audio else None)
         else:
             # Output master assembled frames
-            if session.master_frames is not None:
-                out_imgs = session.master_frames
-            else:
-                out_imgs = edited_images
-
+            out_imgs = session.get_assembled_frames()
             raw_aud = session.master_audio
 
         fps = float(session.meta.get("fps", 24.0))

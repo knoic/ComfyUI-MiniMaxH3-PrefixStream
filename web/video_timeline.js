@@ -44,6 +44,7 @@ app.registerExtension({
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function () {
                 const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
+                this._isConfigured = true;
                 // Auto-heal legacy widget values (e.g. if 24 was saved for auto_advance)
                 const autoAdv = this.widgets?.find(w => w.name === "auto_advance");
                 if (autoAdv) {
@@ -282,10 +283,40 @@ function setupTimelineWidget(node, nodeTypeName) {
             loopBtn.innerHTML = loopSelectionEnabled ? "🔁 循环当前段: 开" : "🔁 循环当前段: 关";
         };
 
+        const markInBtn = document.createElement("button");
+        markInBtn.className = "player-btn mark-btn";
+        markInBtn.innerHTML = "[ 入点";
+        markInBtn.title = "将当前播放帧设为自由区间起始帧 (靠近上一段边缘时自动吸附)";
+        markInBtn.onclick = (e) => {
+            e.stopPropagation();
+            markIn();
+        };
+
+        const markOutBtn = document.createElement("button");
+        markOutBtn.className = "player-btn mark-btn";
+        markOutBtn.innerHTML = "] 出点";
+        markOutBtn.title = "将当前播放帧设为自由区间结束帧";
+        markOutBtn.onclick = (e) => {
+            e.stopPropagation();
+            markOut();
+        };
+
+        const snapBtn = document.createElement("button");
+        snapBtn.className = "player-btn snap-btn";
+        snapBtn.innerHTML = "🧲 磁吸接上一段";
+        snapBtn.title = "自动将起始帧精准吸附至上一已编辑片段的结束帧，杜绝断层或重复";
+        snapBtn.onclick = (e) => {
+            e.stopPropagation();
+            snapToPreviousEnd();
+        };
+
         leftGroup.appendChild(playBtn);
         leftGroup.appendChild(prevFrameBtn);
         leftGroup.appendChild(nextFrameBtn);
         leftGroup.appendChild(loopBtn);
+        leftGroup.appendChild(markInBtn);
+        leftGroup.appendChild(markOutBtn);
+        leftGroup.appendChild(snapBtn);
 
         const rightGroup = document.createElement("div");
         rightGroup.className = "player-right-group";
@@ -414,6 +445,128 @@ function setupTimelineWidget(node, nodeTypeName) {
         videoEl.currentTime = Math.max(0, videoEl.currentTime + (delta / fps));
     }
 
+    function showSnapToast(msg) {
+        const oldToast = container.querySelector(".minimax-snap-toast");
+        if (oldToast) oldToast.remove();
+        const toast = document.createElement("div");
+        toast.className = "minimax-snap-toast";
+        toast.innerText = msg;
+        container.appendChild(toast);
+        setTimeout(() => { if (toast.parentNode) toast.remove(); }, 2500);
+    }
+
+    function snapToPreviousEnd() {
+        const startWidget = node.widgets?.find(w => w.name === "custom_start_frame");
+        const endWidget = node.widgets?.find(w => w.name === "custom_end_frame");
+        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
+        const chunkLenWidget = node.widgets?.find(w => w.name === "chunk_length");
+        const totalFrames = cachedMeta?.total_frames || 99999;
+        const defSpan = parseInt(chunkLenWidget?.value || 120, 10);
+
+        // Find highest completed frame from cachedMeta.chunks
+        const completedChunks = (cachedMeta?.chunks || []).filter(c => c.status === "completed");
+        let snapFrame = 0;
+        if (completedChunks.length > 0) {
+            snapFrame = Math.max(...completedChunks.map(c => c.end_frame));
+        } else if (startWidget && endWidget) {
+            const curEf = parseInt(endWidget.value || 0, 10);
+            if (curEf > 0) snapFrame = curEf;
+        }
+
+        snapFrame = Math.max(0, Math.min(snapFrame, totalFrames - 1));
+        const newEnd = Math.min(totalFrames, snapFrame + defSpan);
+
+        if (modeWidget && !modeWidget.value?.includes("Custom Range")) {
+            modeWidget.value = "Custom Range (自由区间)";
+            if (modeWidget.callback) modeWidget.callback(modeWidget.value);
+        }
+        if (startWidget) {
+            startWidget.value = snapFrame;
+            if (startWidget.callback) startWidget.callback(snapFrame);
+        }
+        if (endWidget) {
+            endWidget.value = newEnd;
+            if (endWidget.callback) endWidget.callback(newEnd);
+        }
+
+        if (videoEl && cachedMeta) {
+            const fps = cachedMeta.fps || 24.0;
+            videoEl.currentTime = snapFrame / fps;
+        }
+
+        showSnapToast(`🧲 已磁吸对齐上一段末尾 (第 ${snapFrame} 帧，选区 ${snapFrame}~${newEnd} 帧)`);
+        renderTimeline();
+    }
+
+    function markIn() {
+        if (!videoEl) return;
+        const fps = cachedMeta?.fps || 24.0;
+        let curFrame = Math.round(videoEl.currentTime * fps);
+        const totalFrames = cachedMeta?.total_frames || 99999;
+
+        // Smart snap: if within 3 frames of any completed chunk's end frame, snap exactly to it!
+        const completedChunks = (cachedMeta?.chunks || []).filter(c => c.status === "completed");
+        let didSnap = false;
+        for (const c of completedChunks) {
+            if (Math.abs(curFrame - c.end_frame) <= 3) {
+                curFrame = c.end_frame;
+                didSnap = true;
+                break;
+            }
+        }
+
+        curFrame = Math.max(0, Math.min(curFrame, totalFrames - 1));
+
+        const startWidget = node.widgets?.find(w => w.name === "custom_start_frame");
+        const endWidget = node.widgets?.find(w => w.name === "custom_end_frame");
+        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
+        const chunkLenWidget = node.widgets?.find(w => w.name === "chunk_length");
+        const defSpan = parseInt(chunkLenWidget?.value || 120, 10);
+
+        if (modeWidget && !modeWidget.value?.includes("Custom Range")) {
+            modeWidget.value = "Custom Range (自由区间)";
+            if (modeWidget.callback) modeWidget.callback(modeWidget.value);
+        }
+        if (startWidget) {
+            startWidget.value = curFrame;
+            if (startWidget.callback) startWidget.callback(curFrame);
+        }
+        if (endWidget && parseInt(endWidget.value || 0, 10) <= curFrame) {
+            const newEnd = Math.min(totalFrames, curFrame + defSpan);
+            endWidget.value = newEnd;
+            if (endWidget.callback) endWidget.callback(newEnd);
+        }
+
+        showSnapToast(didSnap ? `🧲 已自动吸附至上一段末尾 (第 ${curFrame} 帧)` : `📍 已设入点: 第 ${curFrame} 帧`);
+        renderTimeline();
+    }
+
+    function markOut() {
+        if (!videoEl) return;
+        const fps = cachedMeta?.fps || 24.0;
+        let curFrame = Math.round(videoEl.currentTime * fps);
+        const totalFrames = cachedMeta?.total_frames || 99999;
+
+        const startWidget = node.widgets?.find(w => w.name === "custom_start_frame");
+        const endWidget = node.widgets?.find(w => w.name === "custom_end_frame");
+        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
+
+        const curStart = parseInt(startWidget?.value || 0, 10);
+        curFrame = Math.max(curStart + 1, Math.min(curFrame, totalFrames));
+
+        if (modeWidget && !modeWidget.value?.includes("Custom Range")) {
+            modeWidget.value = "Custom Range (自由区间)";
+            if (modeWidget.callback) modeWidget.callback(modeWidget.value);
+        }
+        if (endWidget) {
+            endWidget.value = curFrame;
+            if (endWidget.callback) endWidget.callback(curFrame);
+        }
+
+        showSnapToast(`📍 已设出点: 第 ${curFrame} 帧 (长度: ${curFrame - curStart} 帧)`);
+        renderTimeline();
+    }
+
     function getActiveWindow() {
         const chunkIndexWidget = node.widgets?.find(w => w.name === "chunk_index");
         const chunkLenWidget = node.widgets?.find(w => w.name === "chunk_length");
@@ -423,10 +576,10 @@ function setupTimelineWidget(node, nodeTypeName) {
 
         const isCustom = modeWidget?.value?.includes("Custom Range");
         if (isCustom && startWidget && endWidget) {
-            return {
-                startFrame: parseInt(startWidget.value || 0, 10),
-                endFrame: parseInt(endWidget.value || 124, 10),
-            };
+            const totalF = cachedMeta?.total_frames || 99999;
+            const sf = Math.max(0, Math.min(parseInt(startWidget.value || 0, 10), totalF - 1));
+            const ef = Math.max(sf + 1, Math.min(parseInt(endWidget.value || 124, 10), totalF));
+            return { startFrame: sf, endFrame: ef };
         }
 
         const cIdx = parseInt(chunkIndexWidget?.value || 0, 10);
@@ -438,6 +591,22 @@ function setupTimelineWidget(node, nodeTypeName) {
     }
 
     function applyChunkLength(targetLen) {
+        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
+        if (modeWidget?.value?.includes("Custom Range")) {
+            const startWidget = node.widgets?.find(w => w.name === "custom_start_frame");
+            const endWidget = node.widgets?.find(w => w.name === "custom_end_frame");
+            const sf = parseInt(startWidget?.value || 0, 10);
+            const totalF = cachedMeta?.total_frames || 99999;
+            const newEf = Math.min(totalF, sf + targetLen);
+            if (endWidget) {
+                endWidget.value = newEf;
+                if (endWidget.callback) endWidget.callback(newEf);
+            }
+            showSnapToast(`⚡ 自由区间长度已调整为 ${targetLen} 帧 (${sf}~${newEf} 帧)`);
+            renderTimeline();
+            return;
+        }
+
         const chunkLenWidget = node.widgets?.find(w => w.name === "chunk_length");
         if (chunkLenWidget) {
             chunkLenWidget.value = targetLen;
@@ -470,10 +639,13 @@ function setupTimelineWidget(node, nodeTypeName) {
         return "Video_Edit_Project";
     }
 
+    let currentProbeSeq = 0;
+
     // ================= Probe Video & Sync with Server =================
     async function probeVideo(force = false) {
         if (isProbing && !force) return;
         isProbing = true;
+        const probeSeq = ++currentProbeSeq;
 
         if (!isSlicer) {
             // Reassembler node: Trace upstream Slicer connected via slice_context or graph
@@ -488,6 +660,7 @@ function setupTimelineWidget(node, nodeTypeName) {
                 const res = await api.fetchApi(`/minimax/timeline/state?project=${encodeURIComponent(projectName)}`);
                 if (res.ok) {
                     const data = await res.json();
+                    if (probeSeq !== currentProbeSeq) return;
                     if (data.success && data.meta && data.meta.total_frames > 0) {
                         cachedMeta = data.meta;
                         renderTimeline();
@@ -503,7 +676,9 @@ function setupTimelineWidget(node, nodeTypeName) {
             } catch (err) {
                 console.debug("[Reassembler Widget] Fetch state failed:", err);
             } finally {
-                isProbing = false;
+                if (probeSeq === currentProbeSeq) {
+                    isProbing = false;
+                }
             }
             return;
         }
@@ -541,6 +716,7 @@ function setupTimelineWidget(node, nodeTypeName) {
             const res = await api.fetchApi(`/minimax/timeline/probe_video?${params.toString()}`);
             if (res.ok) {
                 const data = await res.json();
+                if (probeSeq !== currentProbeSeq) return;
                 if (data.success) {
                     cachedMeta = data.meta;
                     if (videoEl && data.video_url) {
@@ -558,12 +734,27 @@ function setupTimelineWidget(node, nodeTypeName) {
         } catch (err) {
             console.debug("[Timeline Widget] Probe video failed:", err);
         } finally {
-            isProbing = false;
+            if (probeSeq === currentProbeSeq) {
+                isProbing = false;
+            }
         }
     }
 
     function renderTimeline() {
         if (!cachedMeta) return;
+
+        // Auto-heal / resync if cachedMeta is stale compared to current node widget values
+        if (isSlicer) {
+            const chunkLenWidget = node.widgets?.find(w => w.name === "chunk_length");
+            const projectWidget = node.widgets?.find(w => w.name === "project_name");
+            const curChunkLen = chunkLenWidget ? parseInt(chunkLenWidget.value || 124, 10) : 124;
+            const curProject = projectWidget ? (projectWidget.value || "Video_Edit_Project") : "Video_Edit_Project";
+
+            if (cachedMeta.chunk_length !== curChunkLen || (cachedMeta.project_name && cachedMeta.project_name !== curProject)) {
+                probeVideo(true);
+                return;
+            }
+        }
 
         const projectBadge = container.querySelector("#project-badge");
         const statsBadge = container.querySelector("#stats-badge");
@@ -593,83 +784,171 @@ function setupTimelineWidget(node, nodeTypeName) {
             rulerEnd.innerText = `${formatTime(totalSec)} (Frame ${totalFrames})`;
         }
 
-        // Active chunk index
+        // Active chunk index & mode
         const chunkIndexWidget = node.widgets?.find(w => w.name === "chunk_index");
         const activeIdx = chunkIndexWidget ? parseInt(chunkIndexWidget.value || 0, 10) : selectedChunkIdx;
+        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
+        const isCustomRange = (isSlicer && modeWidget?.value?.includes("Custom Range"));
 
-        // Clean & render chunk blocks
-        const oldBlocks = blocksBar.querySelectorAll(".minimax-chunk-block");
-        oldBlocks.forEach(b => b.remove());
-
-        if (chunks.length === 0) return;
-
-        const completedIndices = new Set(chunks.filter(c => c.status === "completed").map(c => c.chunk_index));
-        const maxCompleted = completedIndices.size > 0 ? Math.max(...completedIndices) : -1;
-
-        chunks.forEach((c) => {
-            const block = document.createElement("div");
-            const cIdx = c.chunk_index;
-            const isCompleted = (c.status === "completed");
-            const isActive = (cIdx === activeIdx);
-            const isGap = (!isCompleted && cIdx < maxCompleted);
-
-            let statusClass = "status-unprocessed";
-            if (isCompleted) statusClass = "status-completed";
-            else if (isGap) statusClass = "status-gap";
-            if (isActive) statusClass += " status-active";
-
-            block.className = `minimax-chunk-block ${statusClass}`;
-            const stTime = formatTime(c.start_frame / fps);
-            const edTime = formatTime(c.end_frame / fps);
-
-            block.innerHTML = `
-                <div class="chunk-label">#${cIdx}</div>
-                <div class="chunk-time">${stTime}</div>
-            `;
-
-            block.title = `分段 #${cIdx} (${c.start_frame}~${c.end_frame}帧, ${stTime}~${edTime})\n点击选中并在上方播放此段`;
-
-            block.onclick = (e) => {
-                e.stopPropagation();
-                selectedChunkIdx = cIdx;
-                if (chunkIndexWidget) {
-                    chunkIndexWidget.value = cIdx;
-                    if (chunkIndexWidget.callback) chunkIndexWidget.callback(cIdx);
-                }
-                const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
-                if (modeWidget) {
-                    modeWidget.value = "Auto Chunk Grid (网格切分)";
-                }
-                if (videoEl) {
-                    isSeeking = true;
-                    videoEl.currentTime = c.start_frame / fps;
-                    videoEl.play();
-                }
-                renderTimeline();
-            };
-
-            blocksBar.appendChild(block);
+        // Clean old rendered items in blocksBar except playhead
+        const children = Array.from(blocksBar.children);
+        children.forEach(child => {
+            if (child.id !== "timeline-playhead") {
+                child.remove();
+            }
         });
 
-        // Update footer details info
-        if (details) {
-            if (isSlicer) {
-                const activeChunk = chunks.find(c => c.chunk_index === activeIdx);
-                if (activeChunk) {
-                    const sf = activeChunk.start_frame;
-                    const ef = activeChunk.end_frame;
+        if (totalFrames <= 0) return;
+
+        if (isCustomRange) {
+            // ================= Custom Range Mode Rendering =================
+            blocksBar.className = "minimax-timeline-blocks-bar custom-range-mode";
+
+            // 1. Background unedited track
+            const bgTrack = document.createElement("div");
+            bgTrack.className = "minimax-custom-track-bg";
+            blocksBar.appendChild(bgTrack);
+
+            // 2. Render all completed chunks proportionally
+            const completedChunks = chunks.filter(c => c.status === "completed");
+            completedChunks.forEach(c => {
+                const sf = Math.max(0, Math.min(c.start_frame, totalFrames));
+                const ef = Math.max(sf, Math.min(c.end_frame, totalFrames));
+                const leftPct = (sf / totalFrames) * 100;
+                const widthPct = Math.max(0.6, ((ef - sf) / totalFrames) * 100);
+
+                const cBlock = document.createElement("div");
+                cBlock.className = "minimax-custom-completed-block";
+                cBlock.style.left = `${leftPct}%`;
+                cBlock.style.width = `${widthPct}%`;
+                cBlock.innerText = `#${c.chunk_index}`;
+                cBlock.title = `已完成片段 #${c.chunk_index} (${sf}~${ef}帧, ${formatTime(sf/fps)}~${formatTime(ef/fps)})\n点击在上方播放此段`;
+                cBlock.onclick = (e) => {
+                    e.stopPropagation();
+                    if (videoEl) {
+                        isSeeking = true;
+                        videoEl.currentTime = sf / fps;
+                        videoEl.play();
+                    }
+                };
+                blocksBar.appendChild(cBlock);
+            });
+
+            // 3. Render gaps if any
+            gaps.forEach(g => {
+                const sf = Math.max(0, Math.min(g.start_frame, totalFrames));
+                const ef = Math.max(sf, Math.min(g.end_frame, totalFrames));
+                const leftPct = (sf / totalFrames) * 100;
+                const widthPct = Math.max(0.4, ((ef - sf) / totalFrames) * 100);
+
+                const gBlock = document.createElement("div");
+                gBlock.className = "minimax-custom-gap-block";
+                gBlock.style.left = `${leftPct}%`;
+                gBlock.style.width = `${widthPct}%`;
+                gBlock.title = `⚠️ 未完成/漏编区间 (${sf}~${ef}帧)`;
+                blocksBar.appendChild(gBlock);
+            });
+
+            // 4. Render Active Custom Selection Band
+            const startWidget = node.widgets?.find(w => w.name === "custom_start_frame");
+            const endWidget = node.widgets?.find(w => w.name === "custom_end_frame");
+            const curSf = Math.max(0, Math.min(parseInt(startWidget?.value || 0, 10), totalFrames - 1));
+            const curEf = Math.max(curSf + 1, Math.min(parseInt(endWidget?.value || 50, 10), totalFrames));
+            const selLeftPct = (curSf / totalFrames) * 100;
+            const selWidthPct = Math.max(0.8, ((curEf - curSf) / totalFrames) * 100);
+            const dur = (curEf - curSf) / fps;
+
+            const selBand = document.createElement("div");
+            selBand.className = "minimax-custom-selection-band";
+            selBand.style.left = `${selLeftPct}%`;
+            selBand.style.width = `${selWidthPct}%`;
+            selBand.innerHTML = `
+                <div class="selection-label">🎯 自由选区 ${curSf}~${curEf}帧</div>
+                <div class="selection-sub">${dur.toFixed(2)}s (${formatTime(curSf/fps)}~${formatTime(curEf/fps)})</div>
+            `;
+            blocksBar.appendChild(selBand);
+
+            // Check if curSf is magnetically snapped to previous end
+            const isSnapped = completedChunks.some(c => c.end_frame === curSf) || curSf === 0;
+
+            if (details) {
+                const snapBadge = isSnapped ? " | 🧲 已磁吸对齐" : "";
+                details.innerText = `🎯 自由选区: ${curSf}~${curEf}帧 (${formatTime(curSf/fps)}~${formatTime(curEf/fps)}) | 长度: ${curEf - curSf}帧 (${dur.toFixed(2)}s)${snapBadge} | 组装完成度: ${covPct}%`;
+            }
+
+        } else {
+            // ================= Classic Auto Chunk Grid Rendering =================
+            blocksBar.className = "minimax-timeline-blocks-bar";
+
+            if (chunks.length === 0) return;
+
+            const completedIndices = new Set(chunks.filter(c => c.status === "completed").map(c => c.chunk_index));
+            const maxCompleted = completedIndices.size > 0 ? Math.max(...completedIndices) : -1;
+
+            chunks.forEach((c) => {
+                const block = document.createElement("div");
+                const cIdx = c.chunk_index;
+                const isCompleted = (c.status === "completed");
+                const isActive = (cIdx === activeIdx);
+                const isGap = (!isCompleted && cIdx < maxCompleted);
+
+                let statusClass = "status-unprocessed";
+                if (isCompleted) statusClass = "status-completed";
+                else if (isGap) statusClass = "status-gap";
+                if (isActive) statusClass += " status-active";
+
+                block.className = `minimax-chunk-block ${statusClass}`;
+                const stTime = formatTime(c.start_frame / fps);
+                const edTime = formatTime(c.end_frame / fps);
+
+                block.innerHTML = `
+                    <div class="chunk-label">#${cIdx}</div>
+                    <div class="chunk-time">${stTime}</div>
+                `;
+
+                block.title = `分段 #${cIdx} (${c.start_frame}~${c.end_frame}帧, ${stTime}~${edTime})\n点击选中并在上方播放此段`;
+
+                block.onclick = (e) => {
+                    e.stopPropagation();
+                    selectedChunkIdx = cIdx;
+                    if (chunkIndexWidget) {
+                        chunkIndexWidget.value = cIdx;
+                        if (chunkIndexWidget.callback) chunkIndexWidget.callback(cIdx);
+                    }
+                    const mWidget = node.widgets?.find(w => w.name === "slice_mode");
+                    if (mWidget) {
+                        mWidget.value = "Auto Chunk Grid (网格切分)";
+                    }
+                    if (videoEl) {
+                        isSeeking = true;
+                        videoEl.currentTime = c.start_frame / fps;
+                        videoEl.play();
+                    }
+                    renderTimeline();
+                };
+
+                blocksBar.appendChild(block);
+            });
+
+            // Update footer details info
+            if (details) {
+                if (isSlicer) {
+                    const activeChunk = chunks.find(c => c.chunk_index === activeIdx);
+                    const { startFrame: actSf, endFrame: actEf } = getActiveWindow();
+                    const sf = activeChunk ? activeChunk.start_frame : actSf;
+                    const ef = activeChunk ? activeChunk.end_frame : actEf;
                     const dur = (ef - sf) / fps;
                     details.innerText = `选中 #${activeIdx}: ${sf}~${ef}帧 (${formatTime(sf/fps)}~${formatTime(ef/fps)}) | 长度: ${ef - sf}帧 (${dur.toFixed(2)}s)`;
-                }
-            } else {
-                const doneCount = completedIndices.size;
-                const totalCount = chunks.length;
-                if (covPct >= 100) {
-                    details.innerHTML = `<span style="color:#10b981;font-weight:bold;">🎉 全长视频已 100% 拼接完成！所有分段均已缝合到位。可点击右上角【🎬 导出全片 MP4】。</span>`;
                 } else {
-                    const activeChunk = chunks.find(c => c.chunk_index === activeIdx);
-                    const selInfo = activeChunk ? ` | 选中 #${activeIdx} (${activeChunk.status === 'completed' ? '已回填' : '未回填'})` : '';
-                    details.innerText = `总装进度: ${covPct}% (已缝合 ${doneCount}/${totalCount} 段)${selInfo}`;
+                    const doneCount = completedIndices.size;
+                    const totalCount = chunks.length;
+                    if (covPct >= 100) {
+                        details.innerHTML = `<span style="color:#10b981;font-weight:bold;">🎉 全长视频已 100% 拼接完成！所有分段均已缝合到位。可点击右上角【🎬 导出全片 MP4】。</span>`;
+                    } else {
+                        const activeChunk = chunks.find(c => c.chunk_index === activeIdx);
+                        const selInfo = activeChunk ? ` | 选中 #${activeIdx} (${activeChunk.status === 'completed' ? '已回填' : '未回填'})` : '';
+                        details.innerText = `总装进度: ${covPct}% (已缝合 ${doneCount}/${totalCount} 段)${selInfo}`;
+                    }
                 }
             }
         }
@@ -708,6 +987,43 @@ function setupTimelineWidget(node, nodeTypeName) {
     }
 
     function advanceChunk(delta = 1) {
+        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
+        if (modeWidget?.value?.includes("Custom Range")) {
+            const startWidget = node.widgets?.find(w => w.name === "custom_start_frame");
+            const endWidget = node.widgets?.find(w => w.name === "custom_end_frame");
+            const chunkIndexWidget = node.widgets?.find(w => w.name === "chunk_index");
+            const totalFrames = cachedMeta?.total_frames || 99999;
+            const curSf = parseInt(startWidget?.value || 0, 10);
+            const curEf = parseInt(endWidget?.value || 120, 10);
+            const span = Math.max(16, curEf - curSf);
+
+            const nextSf = Math.min(totalFrames - 1, curEf);
+            const nextEf = Math.min(totalFrames, nextSf + span);
+
+            if (startWidget) {
+                startWidget.value = nextSf;
+                if (startWidget.callback) startWidget.callback(nextSf);
+            }
+            if (endWidget) {
+                endWidget.value = nextEf;
+                if (endWidget.callback) endWidget.callback(nextEf);
+            }
+            if (chunkIndexWidget) {
+                const nextIdx = parseInt(chunkIndexWidget.value || 0, 10) + 1;
+                chunkIndexWidget.value = nextIdx;
+                if (chunkIndexWidget.callback) chunkIndexWidget.callback(nextIdx);
+            }
+
+            if (videoEl && cachedMeta) {
+                isSeeking = true;
+                videoEl.currentTime = nextSf / (cachedMeta.fps || 24.0);
+                videoEl.play();
+            }
+            showSnapToast(`⏭️ 自由区间已递进: ${nextSf}~${nextEf} 帧`);
+            renderTimeline();
+            return;
+        }
+
         const chunkIndexWidget = node.widgets?.find(w => w.name === "chunk_index");
         if (!chunkIndexWidget) return;
         const totalChunks = cachedMeta?.total_chunks || 999;
@@ -716,7 +1032,6 @@ function setupTimelineWidget(node, nodeTypeName) {
         chunkIndexWidget.value = Math.max(0, nextVal);
         if (chunkIndexWidget.callback) chunkIndexWidget.callback(chunkIndexWidget.value);
 
-        const modeWidget = node.widgets?.find(w => w.name === "slice_mode");
         if (modeWidget) modeWidget.value = "Auto Chunk Grid (网格切分)";
 
         const { startFrame } = getActiveWindow();
@@ -791,13 +1106,13 @@ function setupTimelineWidget(node, nodeTypeName) {
     };
 
     // Attach callbacks to relevant ComfyUI widgets (lightweight, zero setDirtyCanvas!)
-    ["video_file", "chunk_length", "chunk_index", "slice_mode", "force_fps", "target_width", "target_height", "auto_advance"].forEach(wName => {
+    ["video_file", "project_name", "chunk_length", "chunk_index", "slice_mode", "custom_start_frame", "custom_end_frame", "force_fps", "target_width", "target_height", "auto_advance"].forEach(wName => {
         const w = node.widgets?.find(w => w.name === wName);
         if (w) {
             const origCb = w.callback;
             w.callback = function () {
                 if (origCb) origCb.apply(this, arguments);
-                if (wName === "video_file" || wName === "chunk_length" || wName === "force_fps") {
+                if (wName === "video_file" || wName === "project_name" || wName === "chunk_length" || wName === "force_fps" || wName === "target_width" || wName === "target_height") {
                     probeVideo(true);
                 } else {
                     renderTimeline();
@@ -807,8 +1122,12 @@ function setupTimelineWidget(node, nodeTypeName) {
     });
 
     node._refreshTimeline = () => probeVideo(true);
-    node._probeVideoImmediate = () => probeVideo(false);
+    node._probeVideoImmediate = () => probeVideo(true);
 
-    // Initial probe on node initialization
-    setTimeout(() => probeVideo(false), 150);
+    // Initial probe for newly created interactive nodes (if not configured by graph load)
+    setTimeout(() => {
+        if (!node._isConfigured) {
+            probeVideo(true);
+        }
+    }, 250);
 }

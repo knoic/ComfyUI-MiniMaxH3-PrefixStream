@@ -509,7 +509,123 @@ class TestTimelineSlicer(unittest.TestCase):
         self.assertEqual(ctx1["prev_ref_info"]["prev_frame_index"], 49)
         self.assertIn("已编辑成果 ✅", info1)
 
+    def test_chunk_length_change_and_reload_consistency(self):
+        """Verify that modifying chunk_length dynamically recalculates all chunk boundaries without drift."""
+        p_name = "UnitTest_ChunkLengthChange"
+        total_frames = 1608
+        fps = 24.0
+        images = torch.zeros((total_frames, 32, 32, 3), dtype=torch.float32)
+
+        session = get_or_create_timeline_session(p_name)
+        session.initialize_base(images=images, audio=None, fps=fps, chunk_length=124)
+
+        self.assertEqual(session.meta["chunk_length"], 124)
+        self.assertEqual(len(session.meta["chunks"]), 13)
+        self.assertEqual(session.meta["chunks"][0]["start_frame"], 0)
+        self.assertEqual(session.meta["chunks"][0]["end_frame"], 124)
+        self.assertEqual(session.meta["chunks"][3]["start_frame"], 372)
+        self.assertEqual(session.meta["chunks"][3]["end_frame"], 496)
+
+        # Re-initialize / change chunk_length to 90 (as reported in user bug)
+        session.initialize_base(images=images, audio=None, fps=fps, chunk_length=90)
+        self.assertEqual(session.meta["chunk_length"], 90)
+        self.assertEqual(len(session.meta["chunks"]), 18)
+        self.assertEqual(session.meta["chunks"][0]["start_frame"], 0)
+        self.assertEqual(session.meta["chunks"][0]["end_frame"], 90)
+        self.assertEqual(session.meta["chunks"][0]["frame_count"], 90)
+        self.assertEqual(session.meta["chunks"][1]["start_frame"], 90)
+        self.assertEqual(session.meta["chunks"][1]["end_frame"], 180)
+        self.assertEqual(session.meta["chunks"][3]["start_frame"], 270)
+        self.assertEqual(session.meta["chunks"][3]["end_frame"], 360)
+        self.assertEqual(session.meta["chunks"][3]["frame_count"], 90)
+        self.assertEqual(session.meta["chunks"][17]["start_frame"], 1530)
+        self.assertEqual(session.meta["chunks"][17]["end_frame"], 1608)
+        self.assertEqual(session.meta["chunks"][17]["frame_count"], 78)
+
+    def test_incremental_patch_storage_and_streaming_export(self):
+        """Verify incremental patch-based storage without full master_frames materialization and streaming export."""
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            self.skipTest("ffmpeg not available")
+
+        # 1. Create a synthetic 60-frame mp4 video
+        video_path = os.path.join(self.test_dir, "synth_patch_test.mp4")
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-f", "lavfi", "-i", "testsrc=duration=2.5:size=64x48:rate=24",
+            "-f", "lavfi", "-i", "sine=frequency=1000:duration=2.5",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-c:a", "aac",
+            video_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode != 0 or not os.path.isfile(video_path):
+            self.skipTest("ffmpeg synthetic video generation failed")
+
+        p_name = "UnitTest_IncrementalPatch"
+        session = get_or_create_timeline_session(p_name)
+        session.initialize_from_video_file(
+            video_path=video_path,
+            force_fps=24.0,
+            chunk_length=30,
+            target_width=64,
+            target_height=48,
+        )
+
+        # In streaming mode, master_frames MUST be None initially
+        self.assertIsNone(session.master_frames)
+        self.assertEqual(len(session.meta["chunks"]), 2)  # 0~30, 30~60
+
+        # 2. Patch Chunk 0: distinctive values (0.88)
+        patch0 = torch.full((30, 48, 64, 3), 0.88, dtype=torch.float32)
+        session.patch_chunk(
+            chunk_index=0,
+            start_frame=0,
+            end_frame=30,
+            edited_images=patch0,
+            seam_blend_frames=0,
+        )
+
+        # Critical verification: master_frames must STILL be None (no 120GB RAM allocation!)
+        self.assertIsNone(session.master_frames)
+
+        # Verify patch was saved individually as safetensors
+        self.assertTrue(session.has_chunk_patch(0))
+        loaded_p0 = session.load_chunk_patch(0, as_float=True)
+        self.assertIsNotNone(loaded_p0)
+        self.assertTrue(torch.allclose(loaded_p0["frames"][:5], torch.tensor(0.88), atol=0.02))
+
+        # 3. Verify get_previous_reference_frames for Chunk 1 loads from Chunk 0's patch
+        last_f, seq_f, is_edited = session.get_previous_reference_frames(
+            start_frame=30,
+            ref_frames_count=10,
+            target_width=64,
+            target_height=48,
+        )
+        self.assertTrue(is_edited)
+        self.assertEqual(last_f.shape, (1, 48, 64, 3))
+        self.assertEqual(seq_f.shape, (10, 48, 64, 3))
+        self.assertTrue(torch.allclose(seq_f, torch.tensor(0.88), atol=0.02))
+        self.assertIsNone(session.master_frames)  # Still zero RAM allocation!
+
+        # 4. Verify streaming MP4 export without master_frames
+        from engine.timeline_session_manager import export_master_to_video_file
+        export_res = export_master_to_video_file(
+            project_name=p_name,
+            output_dir=self.test_dir,
+            filename="streaming_export_test.mp4",
+        )
+        self.assertTrue(export_res["success"])
+        self.assertTrue(os.path.isfile(export_res["file_path"]))
+        self.assertEqual(export_res["total_frames"], 60)
+
+        # 5. Verify reset_chunk deletes the patch
+        session.reset_chunk(0)
+        self.assertFalse(session.has_chunk_patch(0))
+        self.assertIsNone(session.load_chunk_patch(0))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
