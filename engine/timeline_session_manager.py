@@ -138,7 +138,7 @@ def probe_video_info(video_path: str) -> Dict[str, Any]:
                 "-of", "json",
                 video_path
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace", check=True)
             data = json.loads(res.stdout)
             streams = data.get("streams", [])
             for s in streams:
@@ -898,45 +898,55 @@ class TimelineSession:
             # Left seam: blend with start_frame boundary
             if start_frame > 0 and blend <= expected_len:
                 orig_left = None
-                if self.master_frames is not None and self.master_frames.shape[0] >= start_frame + blend:
-                    orig_left = self.master_frames[start_frame:start_frame + blend]
-                elif src_video and os.path.isfile(src_video):
-                    fps = float(self.meta.get("fps", 24.0))
-                    try:
-                        orig_left = extract_video_chunk_ffmpeg(
-                            video_path=src_video,
-                            start_frame=start_frame,
-                            chunk_length=blend,
-                            force_fps=fps,
-                            target_width=target_w,
-                            target_height=target_h,
-                        )
-                    except Exception as e:
-                        logger.warning("[Timeline] Failed to extract seam blend frames from video: %s", e)
+                prev_c_idx = None
+                for c in self.meta.get("chunks", []):
+                    if c.get("end_frame") == start_frame and c.get("status") == "completed":
+                        prev_c_idx = c.get("chunk_index")
+                        break
+                if prev_c_idx is not None and self.has_chunk_patch(prev_c_idx):
+                    prev_p = self.load_chunk_patch(prev_c_idx, as_float=True)
+                    if prev_p and prev_p.get("frames") is not None and prev_p["frames"].shape[0] >= blend:
+                        orig_left = prev_p["frames"][-blend:]
+
+                if orig_left is None:
+                    if self.master_frames is not None and self.master_frames.shape[0] >= start_frame + blend:
+                        orig_left = self.master_frames[start_frame:start_frame + blend]
+                    elif src_video and os.path.isfile(src_video):
+                        fps = float(self.meta.get("fps", 24.0))
+                        try:
+                            orig_left = extract_video_chunk_ffmpeg(
+                                video_path=src_video,
+                                start_frame=start_frame,
+                                chunk_length=blend,
+                                force_fps=fps,
+                                target_width=target_w,
+                                target_height=target_h,
+                            )
+                        except Exception as e:
+                            logger.warning("[Timeline] Failed to extract seam blend frames from video: %s", e)
 
                 if orig_left is not None and orig_left.shape[0] == blend:
                     t = torch.linspace(0.0, math.pi, blend, device="cpu", dtype=torch.float32)
                     alpha = (0.5 - 0.5 * torch.cos(t)).view(blend, 1, 1, 1)
                     patch_cpu[:blend] = orig_left.to(device="cpu", dtype=torch.float32) * (1.0 - alpha) + patch_cpu[:blend] * alpha
 
-            # Right seam: blend with end_frame boundary
-            if end_frame < total_frames and blend <= expected_len:
+            # Right seam: Only blend if the adjacent right chunk is ALREADY completed (e.g. patching an interior gap).
+            # NEVER blend into unedited video on the right, because that would force the chunk's tail to revert
+            # to unedited video, destroying the reference frame for the next sequential chunk!
+            next_c_idx = None
+            for c in self.meta.get("chunks", []):
+                if c.get("start_frame") == end_frame and c.get("status") == "completed":
+                    next_c_idx = c.get("chunk_index")
+                    break
+
+            if next_c_idx is not None and end_frame < total_frames and blend <= expected_len:
                 orig_right = None
-                if self.master_frames is not None and self.master_frames.shape[0] >= end_frame:
+                if self.has_chunk_patch(next_c_idx):
+                    next_p = self.load_chunk_patch(next_c_idx, as_float=True)
+                    if next_p and next_p.get("frames") is not None and next_p["frames"].shape[0] >= blend:
+                        orig_right = next_p["frames"][:blend]
+                if orig_right is None and self.master_frames is not None and self.master_frames.shape[0] >= end_frame:
                     orig_right = self.master_frames[end_frame - blend:end_frame]
-                elif src_video and os.path.isfile(src_video):
-                    fps = float(self.meta.get("fps", 24.0))
-                    try:
-                        orig_right = extract_video_chunk_ffmpeg(
-                            video_path=src_video,
-                            start_frame=end_frame - blend,
-                            chunk_length=blend,
-                            force_fps=fps,
-                            target_width=target_w,
-                            target_height=target_h,
-                        )
-                    except Exception as e:
-                        logger.warning("[Timeline] Failed to extract right seam blend frames: %s", e)
 
                 if orig_right is not None and orig_right.shape[0] == blend:
                     t = torch.linspace(0.0, math.pi, blend, device="cpu", dtype=torch.float32)
@@ -1075,20 +1085,19 @@ class TimelineSession:
         first_chunk_mode: str = "Current Chunk First Frame (当前片段首帧)",
         current_chunk_images: Optional[torch.Tensor] = None,
         optional_first_frame_ref: Optional[torch.Tensor] = None,
+        optional_prev_chunk_result: Optional[torch.Tensor] = None,
         target_width: int = 0,
         target_height: int = 0,
         force_fps: float = 24.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor, bool]:
-        """Extracts the last frame (1 frame) and sequence (N frames) preceding start_frame.
+        base_images: Optional[torch.Tensor] = None,
+        return_all: bool = False,
+    ) -> Any:
+        """Extracts reference frames preceding start_frame for both original video and LLM-edited results.
 
-        If the preceding segment has already been patched/reassembled,
-        the returned frames will be the EDITED frames.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor, bool]:
-                - prev_last_frame: [1, H, W, 3] (single frame for image reference)
-                - prev_ref_frames: [N, H, W, 3] (multi-frame sequence for video reference)
-                - is_edited: bool, whether the reference frames come from completed/edited chunks
+        If return_all is True:
+            Returns (smart_last_f, smart_ref_frames, edited_last_f, orig_last_f, edited_ref_frames, orig_ref_frames, is_edited)
+        If return_all is False (default for direct callers):
+            Returns (smart_last_f, smart_ref_frames, is_edited)
         """
         N = max(1, int(ref_frames_count))
 
@@ -1117,74 +1126,45 @@ class TimelineSession:
                 t = resized.permute(0, 2, 3, 1).contiguous()
             return t.clamp(0.0, 1.0)
 
-        # Scenario 1: First chunk (start_frame <= 0)
-        if start_frame <= 0:
-            if optional_first_frame_ref is not None:
-                ref_t = _standardize(optional_first_frame_ref, H, W)
-                last_f = ref_t[-1:].clone()
-                if ref_t.shape[0] >= N:
-                    seq_f = ref_t[-N:].clone()
-                else:
-                    pad = ref_t[0:1].repeat(N - ref_t.shape[0], 1, 1, 1)
-                    seq_f = torch.cat([pad, ref_t], dim=0)
-                return last_f, seq_f, False
-
-            if "Black" in str(first_chunk_mode) or "Zero" in str(first_chunk_mode):
-                last_f = torch.zeros((1, H, W, 3), dtype=torch.float32)
-                seq_f = torch.zeros((N, H, W, 3), dtype=torch.float32)
-                return last_f, seq_f, False
-
-            # Default: Current Chunk First Frame
-            if current_chunk_images is not None and current_chunk_images.shape[0] > 0:
-                curr = _standardize(current_chunk_images, H, W)
-                last_f = curr[0:1].clone()
-                if curr.shape[0] >= N:
-                    seq_f = curr[:N].clone()
-                else:
-                    pad = curr[-1:].repeat(N - curr.shape[0], 1, 1, 1)
-                    seq_f = torch.cat([curr, pad], dim=0)
-                return last_f, seq_f, False
-            else:
-                last_f = torch.zeros((1, H, W, 3), dtype=torch.float32)
-                seq_f = torch.zeros((N, H, W, 3), dtype=torch.float32)
-                return last_f, seq_f, False
-
-        # Scenario 2: Subsequent chunk (start_frame > 0)
+        # -------------------------------------------------------------
+        # 1. Extract strictly ORIGINAL video reference frames
+        # -------------------------------------------------------------
         e_prev = int(start_frame)
         s_prev = max(0, e_prev - N)
         k_len = max(1, e_prev - s_prev)
+        orig_raw: Optional[torch.Tensor] = None
 
-        # Check if the chunk containing the previous frame was completed/edited
-        is_edited = False
-        prev_chunk_idx = None
-        for c in self.meta.get("chunks", []):
-            if c.get("start_frame", -1) <= (e_prev - 1) < c.get("end_frame", -1):
-                prev_chunk_idx = c.get("chunk_index")
-                if c.get("status") == "completed":
-                    is_edited = True
-                break
-
-        raw: Optional[torch.Tensor] = None
-        # 1. In tensor mode with master_frames available
-        if self.master_frames is not None and self.master_frames.shape[0] >= e_prev:
-            raw = self.master_frames[s_prev:e_prev].clone()
-        # 2. In patch-based storage mode with saved patch
-        elif is_edited and prev_chunk_idx is not None:
-            patch = self.load_chunk_patch(prev_chunk_idx, as_float=True)
-            if patch is not None and patch.get("frames") is not None:
-                p_frames = patch["frames"]
-                if p_frames.shape[0] >= k_len:
-                    raw = p_frames[-k_len:].clone()
-                else:
-                    raw = p_frames.clone()
-
-        # 3. Fallback: extract directly from video file (only k_len frames!) or connected images
-        if raw is None:
+        if base_images is not None and isinstance(base_images, torch.Tensor):
+            if start_frame <= 0:
+                orig_raw = base_images[0:1].clone()
+            else:
+                orig_raw = base_images[s_prev:e_prev].clone()
+        elif start_frame <= 0:
+            if current_chunk_images is not None and current_chunk_images.shape[0] > 0:
+                orig_raw = current_chunk_images[0:1].clone()
+            else:
+                src_video = self.meta.get("source_video_path", "")
+                if src_video and os.path.isfile(src_video):
+                    try:
+                        fps = float(self.meta.get("fps", force_fps) or force_fps)
+                        orig_raw = extract_video_chunk_ffmpeg(
+                            video_path=src_video,
+                            start_frame=0,
+                            chunk_length=1,
+                            force_fps=fps,
+                            target_width=W,
+                            target_height=H,
+                        )
+                    except Exception as e:
+                        logger.warning("[Timeline] Failed to extract chunk 0 orig frame: %s", e)
+            if orig_raw is None:
+                orig_raw = torch.zeros((1, H, W, 3), dtype=torch.float32)
+        else:
             src_video = self.meta.get("source_video_path", "")
             if src_video and os.path.isfile(src_video):
                 fps = float(self.meta.get("fps", force_fps) or force_fps)
                 try:
-                    raw = extract_video_chunk_ffmpeg(
+                    orig_raw = extract_video_chunk_ffmpeg(
                         video_path=src_video,
                         start_frame=s_prev,
                         chunk_length=k_len,
@@ -1193,23 +1173,105 @@ class TimelineSession:
                         target_height=H,
                     )
                 except Exception as e:
-                    logger.warning("[Timeline] Failed to extract prev reference frames from video: %s", e)
+                    logger.warning("[Timeline] Failed to extract orig prev reference frames: %s", e)
+            elif self.master_frames is not None and self.master_frames.shape[0] >= e_prev:
+                orig_raw = self.master_frames[s_prev:e_prev].clone()
+            elif current_chunk_images is not None and current_chunk_images.shape[0] > 0:
+                orig_raw = current_chunk_images[0:1].repeat(k_len, 1, 1, 1)
 
-            if raw is None and current_chunk_images is not None:
-                raw = current_chunk_images[0:1].repeat(k_len, 1, 1, 1)
+            if orig_raw is None:
+                orig_raw = torch.zeros((k_len, H, W, 3), dtype=torch.float32)
 
-            if raw is None:
-                raw = torch.zeros((k_len, H, W, 3), dtype=torch.float32)
-
-        raw = _standardize(raw, H, W)
-        if raw.shape[0] < N:
-            pad = raw[0:1].repeat(N - raw.shape[0], 1, 1, 1)
-            seq_f = torch.cat([pad, raw], dim=0)
+        orig_raw = _standardize(orig_raw, H, W)
+        if orig_raw.shape[0] < N:
+            pad = orig_raw[0:1].repeat(N - orig_raw.shape[0], 1, 1, 1)
+            orig_seq_f = torch.cat([pad, orig_raw], dim=0)
         else:
-            seq_f = raw[-N:].clone()
+            orig_seq_f = orig_raw[-N:].clone()
+        orig_last_f = orig_seq_f[-1:].clone()
 
-        last_f = seq_f[-1:].clone()
-        return last_f, seq_f, is_edited
+        # -------------------------------------------------------------
+        # 2. Extract EDITED reference frames (from LLM result)
+        # -------------------------------------------------------------
+        is_edited = False
+        edited_raw: Optional[torch.Tensor] = None
+
+        # Priority 2A: Explicit user-connected previous chunk result
+        if optional_prev_chunk_result is not None and isinstance(optional_prev_chunk_result, torch.Tensor) and optional_prev_chunk_result.numel() > 0:
+            res_std = _standardize(optional_prev_chunk_result, H, W)
+            if res_std.shape[0] >= k_len:
+                edited_raw = res_std[-k_len:].clone()
+            else:
+                edited_raw = res_std.clone()
+            is_edited = True
+
+        # Priority 2B: In session patch storage or master frames
+        if edited_raw is None and start_frame > 0:
+            prev_chunk_idx = None
+            for c in self.meta.get("chunks", []):
+                if c.get("start_frame", -1) <= (e_prev - 1) < c.get("end_frame", -1):
+                    prev_chunk_idx = c.get("chunk_index")
+                    if c.get("status") == "completed":
+                        is_edited = True
+                    break
+
+            if self.master_frames is not None and is_edited and self.master_frames.shape[0] >= e_prev:
+                edited_raw = self.master_frames[s_prev:e_prev].clone()
+            elif prev_chunk_idx is not None and (is_edited or self.has_chunk_patch(prev_chunk_idx)):
+                patch = self.load_chunk_patch(prev_chunk_idx, as_float=True)
+                if patch is not None and patch.get("frames") is not None:
+                    p_frames = patch["frames"]
+                    if p_frames.shape[0] >= k_len:
+                        edited_raw = p_frames[-k_len:].clone()
+                    else:
+                        edited_raw = p_frames.clone()
+                    is_edited = True
+
+        # Fallback for edited frames if not edited or first chunk
+        if edited_raw is not None and is_edited:
+            edited_raw = _standardize(edited_raw, H, W)
+            if edited_raw.shape[0] < N:
+                pad = edited_raw[0:1].repeat(N - edited_raw.shape[0], 1, 1, 1)
+                edited_seq_f = torch.cat([pad, edited_raw], dim=0)
+            else:
+                edited_seq_f = edited_raw[-N:].clone()
+            edited_last_f = edited_seq_f[-1:].clone()
+        else:
+            # Graceful fallback when chunk result is not yet available
+            if optional_first_frame_ref is not None:
+                ref_t = _standardize(optional_first_frame_ref, H, W)
+                edited_last_f = ref_t[-1:].clone()
+                if ref_t.shape[0] >= N:
+                    edited_seq_f = ref_t[-N:].clone()
+                else:
+                    pad = ref_t[0:1].repeat(N - ref_t.shape[0], 1, 1, 1)
+                    edited_seq_f = torch.cat([pad, ref_t], dim=0)
+            elif "Black" in str(first_chunk_mode) or "Zero" in str(first_chunk_mode):
+                edited_last_f = torch.zeros((1, H, W, 3), dtype=torch.float32)
+                edited_seq_f = torch.zeros((N, H, W, 3), dtype=torch.float32)
+            else:
+                edited_last_f = orig_last_f.clone()
+                edited_seq_f = orig_seq_f.clone()
+
+        # -------------------------------------------------------------
+        # 3. Construct SMART reference frames (preserving backward-compatibility)
+        # -------------------------------------------------------------
+        if is_edited:
+            smart_last_f = edited_last_f.clone()
+            smart_seq_f = edited_seq_f.clone()
+        elif optional_first_frame_ref is not None and start_frame <= 0:
+            smart_last_f = edited_last_f.clone()
+            smart_seq_f = edited_seq_f.clone()
+        elif ("Black" in str(first_chunk_mode) or "Zero" in str(first_chunk_mode)) and start_frame <= 0:
+            smart_last_f = edited_last_f.clone()
+            smart_seq_f = edited_seq_f.clone()
+        else:
+            smart_last_f = orig_last_f.clone()
+            smart_seq_f = orig_seq_f.clone()
+
+        if return_all:
+            return smart_last_f, smart_seq_f, edited_last_f, orig_last_f, edited_seq_f, orig_seq_f, is_edited
+        return smart_last_f, smart_seq_f, is_edited
 
     def get_assembled_frames(self) -> torch.Tensor:
         """Assembles and returns long video frames [T, H, W, 3] on-demand."""
@@ -1288,6 +1350,7 @@ def slice_video_and_audio(
     prev_ref_frames_count: int = 16,
     first_chunk_ref_mode: str = "Current Chunk First Frame (当前片段首帧)",
     optional_first_frame_ref: Optional[torch.Tensor] = None,
+    optional_prev_chunk_result: Optional[torch.Tensor] = None,
     return_ref_frames: bool = False,
 ) -> Any:
     """Smart slicing supporting both direct lazy video file decoding and pre-loaded image tensors."""
@@ -1426,15 +1489,26 @@ def slice_video_and_audio(
         raise ValueError("Either 'video_file' or 'images' input must be provided to MiniMaxVideoChunkSlicer")
 
     # Extract previous reference frames (single tail frame & multi-frame sequence)
-    prev_last_frame, prev_ref_frames, is_prev_edited = session.get_previous_reference_frames(
+    (
+        prev_last_frame,
+        prev_ref_frames,
+        prev_edited_last_frame,
+        prev_orig_last_frame,
+        prev_edited_ref_frames,
+        prev_orig_ref_frames,
+        is_prev_edited,
+    ) = session.get_previous_reference_frames(
         start_frame=start_frame,
         ref_frames_count=prev_ref_frames_count,
         first_chunk_mode=first_chunk_ref_mode,
         current_chunk_images=chunk_images,
         optional_first_frame_ref=optional_first_frame_ref,
+        optional_prev_chunk_result=optional_prev_chunk_result,
         target_width=session.meta.get("width", target_width),
         target_height=session.meta.get("height", target_height),
         force_fps=effective_fps,
+        base_images=images,
+        return_all=True,
     )
 
     slice_context["prev_ref_info"] = {
@@ -1442,7 +1516,7 @@ def slice_video_and_audio(
         "is_edited": bool(is_prev_edited),
         "prev_frame_index": max(0, start_frame - 1),
         "ref_frames_count": int(prev_ref_frames.shape[0]),
-        "source": "session_master (edited)" if is_prev_edited else ("base_video" if start_frame > 0 else "first_chunk_fallback"),
+        "source": "session_patch (edited)" if is_prev_edited else ("base_video" if start_frame > 0 else "first_chunk_fallback"),
     }
 
     total_chunks = session.meta.get("total_chunks", 1)
@@ -1456,14 +1530,26 @@ def slice_video_and_audio(
     )
     if start_frame > 0:
         if is_prev_edited:
-            info_text += f" | 🔗 上段参考: 帧 #{start_frame - 1} (已编辑成果 ✅)"
+            info_text += f" | 🔗 上段成果尾帧: 帧 #{start_frame - 1} (已加载大模型成果 ✅)"
         else:
-            info_text += f" | 🔗 上段参考: 帧 #{start_frame - 1} (未编辑原片 ⚠️)"
+            info_text += f" | ⚠️ 上段成果尾帧: 尚未回填成果 (已平稳回退)"
+        info_text += f" | 🎞️ 上段原片尾帧: 原始帧 #{start_frame - 1}"
     else:
         info_text += f" | 🔗 上段参考: 首段第0帧"
 
     if return_ref_frames:
-        return chunk_images, chunk_audio, slice_context, info_text, prev_last_frame, prev_ref_frames
+        return (
+            chunk_images,
+            chunk_audio,
+            slice_context,
+            info_text,
+            prev_last_frame,
+            prev_ref_frames,
+            prev_edited_last_frame,
+            prev_orig_last_frame,
+            prev_edited_ref_frames,
+            prev_orig_ref_frames,
+        )
 
     return chunk_images, chunk_audio, slice_context, info_text
 

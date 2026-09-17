@@ -193,15 +193,20 @@ MiniMax H3 在 ComfyUI 中使用联合 AV `LATENT` 封装视频和音频。续�
 | `slice_context` | `SLICE_CONTEXT` | 传递给下游 `MiniMaxVideoPatchReassembler` 的时序缝合上下文。 |
 | `video_info` | `VHS_VIDEOINFO` | 与 VideoHelperSuite 兼容的视频规格字典。 |
 | `timeline_preview` | `IMAGE` | 可直接接 `PreviewImage` 的时间轴进度条卡片。 |
-| `prev_last_frame` | `IMAGE` | **[新增] 上一片段最后一帧（图片参考）**：单帧图像 `[1, H, W, 3]`。专门连当下游图生视频（I2V）或风格迁移模型的首帧/图片参考端口。系统会自动优先获取上一段**已编辑后的最终成果**！首段运行时自动平稳回退当前片段第 0 帧。 |
-| `prev_ref_frames` | `IMAGE` | **[新增] 上一片段尾部多帧序列（视频参考）**：多帧序列 `[N, H, W, 3]`（$N$ 由参数 `prev_ref_frames_count` 设定）。用于视频动作延续、PrefixStream 前缀接力或多帧条件约束。 |
+| `prev_last_frame` | `IMAGE` | **[智能参考] 上一片段最后一帧**：单帧图像 `[1, H, W, 3]`。自动优先获取上一段已编辑成果，未编辑时平滑回退原片（保持旧工作流 100% 兼容）。 |
+| `prev_ref_frames` | `IMAGE` | **[智能参考] 上一片段尾部多帧序列**：多帧序列 `[N, H, W, 3]`。用于动作延续或上下文前缀约束。 |
+| `prev_edited_last_frame` | `IMAGE` | **[全新] 上个片段成果的最后一帧（大模型处理后）**：严格提取上一片段**经过大模型处理生成**后的成品最后一帧！专门用于下游图生视频（I2V）或风格迁移首帧参考，确保人物服饰与画风接力完全连贯！首段或尚未回填时支持平稳优雅回退。 |
+| `prev_orig_last_frame` | `IMAGE` | **[全新] 上个片段原视频的最后一帧（原始未处理）**：严格提取未经任何模型修改的**原视频上一段尾帧**！专门用于 ControlNet、骨骼姿态、光流匹配或原始动作参考。 |
+| `prev_edited_ref_frames` | `IMAGE` | **[全新] 上个片段成果尾部多帧序列（大模型处理后）**：多帧序列 `[N, H, W, 3]`。大模型编辑后的多帧视频接力参考。 |
+| `prev_orig_ref_frames` | `IMAGE` | **[全新] 上个片段原视频尾部多帧序列（原始未处理）**：多帧序列 `[N, H, W, 3]`。原视频的多帧动作与背景序列。 |
 
-**核心参数设置：**
+**核心参数与可选输入：**
+- `optional_prev_chunk_result`（可选输入）：若用户在 ComfyUI 中通过外部缓存或独立节点获得了上一个片段的生成成果，可以直接接驳此端口，切片器将直接优先提取该输入的尾帧作为成果参考。
+- `optional_first_frame_ref`（可选输入）：若需要在首段指定外部自定义首帧（如特定的立绘图或参考原画），可连接此端口。
 - `prev_ref_frames_count`：输出多帧参考序列时的帧数（默认 `16`）。
 - `first_chunk_ref_mode`：首段没有前序片段时的回退策略：
   - `Current Chunk First Frame (当前片段首帧)`（推荐）：自动取当前片段首帧，确保首段也能平滑执行图生视频链路而无需手动切换分支。
   - `Black / Zero Frame (全黑空帧)`：输出全黑静止帧。
-- `optional_first_frame_ref`（可选输入）：若需要在首段指定外部自定义首帧（如特定的立绘图或参考原画），可连接此端口。
 
 ---
 

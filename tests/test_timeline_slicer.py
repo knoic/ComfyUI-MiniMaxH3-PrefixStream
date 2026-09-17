@@ -147,7 +147,7 @@ class TestTimelineSlicer(unittest.TestCase):
             chunk_length=124,
             chunk_index=0,
             images=full_video,
-        )
+        )[:10]
         self.assertEqual(chunk_imgs.shape[0], 124)
         self.assertIsNotNone(preview)
         self.assertIn("UnitTest_Pipeline", info)
@@ -392,20 +392,25 @@ class TestTimelineSlicer(unittest.TestCase):
         self.assertEqual(out_imgs.shape, (100, 48, 64, 3))
 
     def test_slicer_node_outputs_count_and_types(self):
-        """Verify MiniMaxVideoChunkSlicerNode exports 10 returns with prev_last_frame and prev_ref_frames."""
+        """Verify MiniMaxVideoChunkSlicerNode exports 14 returns with prev_edited_last_frame and prev_orig_last_frame."""
         slicer = nodes.MiniMaxVideoChunkSlicerNode()
-        self.assertEqual(len(slicer.RETURN_TYPES), 10)
-        self.assertEqual(len(slicer.RETURN_NAMES), 10)
+        self.assertEqual(len(slicer.RETURN_TYPES), 14)
+        self.assertEqual(len(slicer.RETURN_NAMES), 14)
         self.assertEqual(slicer.RETURN_NAMES[8], "prev_last_frame")
         self.assertEqual(slicer.RETURN_NAMES[9], "prev_ref_frames")
-        self.assertEqual(slicer.RETURN_TYPES[8], "IMAGE")
-        self.assertEqual(slicer.RETURN_TYPES[9], "IMAGE")
+        self.assertEqual(slicer.RETURN_NAMES[10], "prev_edited_last_frame")
+        self.assertEqual(slicer.RETURN_NAMES[11], "prev_orig_last_frame")
+        self.assertEqual(slicer.RETURN_NAMES[12], "prev_edited_ref_frames")
+        self.assertEqual(slicer.RETURN_NAMES[13], "prev_orig_ref_frames")
+        for i in range(8, 14):
+            self.assertEqual(slicer.RETURN_TYPES[i], "IMAGE")
 
         # Check input types
         inputs = slicer.INPUT_TYPES()
         self.assertIn("prev_ref_frames_count", inputs["required"])
         self.assertIn("first_chunk_ref_mode", inputs["required"])
         self.assertIn("optional_first_frame_ref", inputs["optional"])
+        self.assertIn("optional_prev_chunk_result", inputs["optional"])
 
     def test_previous_reference_frames_first_chunk_fallback(self):
         """Verify fallback behavior when slicing chunk 0 (no previous chunk)."""
@@ -422,11 +427,14 @@ class TestTimelineSlicer(unittest.TestCase):
             first_chunk_ref_mode="Current Chunk First Frame (当前片段首帧)",
             images=full_video,
         )
-        c_imgs, c_aud, ctx, v_info, preview, fps_val, frame_cnt, info, prev_last_f, prev_ref_fs = out
+        c_imgs, c_aud, ctx, v_info, preview, fps_val, frame_cnt, info, prev_last_f, prev_ref_fs, ed_last, orig_last, ed_ref, orig_ref = out
         self.assertEqual(prev_last_f.shape, (1, 32, 32, 3))
         self.assertEqual(prev_ref_fs.shape, (10, 32, 32, 3))
+        self.assertEqual(ed_last.shape, (1, 32, 32, 3))
+        self.assertEqual(orig_last.shape, (1, 32, 32, 3))
         # Matches first frame of chunk 0
         self.assertTrue(torch.allclose(prev_last_f, c_imgs[0:1]))
+        self.assertTrue(torch.allclose(orig_last, c_imgs[0:1]))
         self.assertFalse(ctx["prev_ref_info"]["has_prev_chunk"])
         self.assertFalse(ctx["prev_ref_info"]["is_edited"])
         self.assertIn("首段第0帧", info)
@@ -441,9 +449,15 @@ class TestTimelineSlicer(unittest.TestCase):
             first_chunk_ref_mode="Black / Zero Frame (全黑空帧)",
             images=full_video,
         )
-        _, _, _, _, _, _, _, _, prev_last_b, prev_ref_b = out_b
+        prev_last_b = out_b[8]
+        prev_ref_b = out_b[9]
+        ed_last_b = out_b[10]
+        orig_last_b = out_b[11]
         self.assertTrue(torch.allclose(prev_last_b, torch.tensor(0.0)))
         self.assertTrue(torch.allclose(prev_ref_b, torch.tensor(0.0)))
+        self.assertTrue(torch.allclose(ed_last_b, torch.tensor(0.0)))
+        # Orig frame is still the actual video frame 0
+        self.assertTrue(torch.allclose(orig_last_b, full_video[0:1]))
 
         # Mode C: optional_first_frame_ref provided
         custom_ref = torch.full((1, 32, 32, 3), 0.77, dtype=torch.float32)
@@ -456,13 +470,16 @@ class TestTimelineSlicer(unittest.TestCase):
             images=full_video,
             optional_first_frame_ref=custom_ref,
         )
-        _, _, _, _, _, _, _, _, prev_last_c, prev_ref_c = out_c
+        prev_last_c = out_c[8]
+        prev_ref_c = out_c[9]
+        ed_last_c = out_c[10]
         self.assertTrue(torch.allclose(prev_last_c, torch.tensor(0.77)))
         self.assertEqual(prev_ref_c.shape, (8, 32, 32, 3))
         self.assertTrue(torch.allclose(prev_ref_c, torch.tensor(0.77)))
+        self.assertTrue(torch.allclose(ed_last_c, torch.tensor(0.77)))
 
     def test_previous_reference_frames_edited_propagation(self):
-        """Verify that after chunk 0 is edited and reassembled, chunk 1 gets edited frames as reference."""
+        """Verify that after chunk 0 is edited and reassembled, chunk 1 gets edited frames and original frames distinctly."""
         slicer = nodes.MiniMaxVideoChunkSlicerNode()
         reassembler = nodes.MiniMaxVideoPatchReassemblerNode()
         p_name = "UnitTest_PrevRefEdited"
@@ -470,13 +487,15 @@ class TestTimelineSlicer(unittest.TestCase):
         orig_video = torch.zeros((100, 32, 32, 3), dtype=torch.float32)  # Raw video is all zeros
 
         # 1. Slice Chunk 0
-        c0_imgs, c0_aud, ctx0, _, _, _, _, _, _, _ = slicer.slice_chunk(
+        c0_out = slicer.slice_chunk(
             video_file="none",
             project_name=p_name,
             chunk_length=50,
             chunk_index=0,
             images=orig_video,
         )
+        c0_imgs = c0_out[0]
+        ctx0 = c0_out[2]
 
         # 2. Simulate model editing Chunk 0: distinct value 0.95
         edited_c0 = torch.full((50, 32, 32, 3), 0.95, dtype=torch.float32)
@@ -488,7 +507,7 @@ class TestTimelineSlicer(unittest.TestCase):
         )
 
         # 3. Slice Chunk 1 (frames 50~100)
-        c1_imgs, c1_aud, ctx1, _, _, _, _, info1, prev_last_f1, prev_ref_fs1 = slicer.slice_chunk(
+        out1 = slicer.slice_chunk(
             video_file="none",
             project_name=p_name,
             chunk_length=50,
@@ -496,18 +515,48 @@ class TestTimelineSlicer(unittest.TestCase):
             prev_ref_frames_count=16,
             images=orig_video,
         )
+        c1_imgs, c1_aud, ctx1, _, _, _, _, info1, prev_last_f1, prev_ref_fs1, ed_last_f1, orig_last_f1, ed_ref_f1, orig_ref_f1 = out1
 
-        # Reference frames MUST be the edited frames (0.95), NOT the original unedited zeros!
+        # prev_last_frame and prev_edited_last_frame MUST be the edited frames (0.95)!
         self.assertEqual(prev_last_f1.shape, (1, 32, 32, 3))
         self.assertTrue(torch.allclose(prev_last_f1, torch.tensor(0.95)))
-        self.assertEqual(prev_ref_fs1.shape, (16, 32, 32, 3))
-        self.assertTrue(torch.allclose(prev_ref_fs1, torch.tensor(0.95)))
+        self.assertEqual(ed_last_f1.shape, (1, 32, 32, 3))
+        self.assertTrue(torch.allclose(ed_last_f1, torch.tensor(0.95)))
+        self.assertTrue(torch.allclose(ed_ref_f1, torch.tensor(0.95)))
+
+        # prev_orig_last_frame MUST be the original unedited zeros!
+        self.assertEqual(orig_last_f1.shape, (1, 32, 32, 3))
+        self.assertTrue(torch.allclose(orig_last_f1, torch.tensor(0.0)))
+        self.assertEqual(orig_ref_f1.shape, (16, 32, 32, 3))
+        self.assertTrue(torch.allclose(orig_ref_f1, torch.tensor(0.0)))
 
         # Metadata checks
         self.assertTrue(ctx1["prev_ref_info"]["has_prev_chunk"])
         self.assertTrue(ctx1["prev_ref_info"]["is_edited"])
         self.assertEqual(ctx1["prev_ref_info"]["prev_frame_index"], 49)
-        self.assertIn("已编辑成果 ✅", info1)
+        self.assertIn("已加载大模型成果 ✅", info1)
+
+    def test_optional_prev_chunk_result_direct_wiring(self):
+        """Verify that optional_prev_chunk_result directly feeds the edited reference frame."""
+        slicer = nodes.MiniMaxVideoChunkSlicerNode()
+        p_name = "UnitTest_DirectWireResult"
+        orig_video = torch.zeros((100, 32, 32, 3), dtype=torch.float32)
+
+        # Directly provide external result tensor (e.g. from upstream model) with value 0.42
+        external_result = torch.full((10, 32, 32, 3), 0.42, dtype=torch.float32)
+
+        out = slicer.slice_chunk(
+            video_file="none",
+            project_name=p_name,
+            chunk_length=50,
+            chunk_index=1,
+            images=orig_video,
+            optional_prev_chunk_result=external_result,
+        )
+        _, _, _, _, _, _, _, _, prev_last, _, ed_last, orig_last, _, _ = out
+        self.assertTrue(torch.allclose(ed_last, torch.tensor(0.42)))
+        self.assertTrue(torch.allclose(prev_last, torch.tensor(0.42)))
+        self.assertTrue(torch.allclose(orig_last, torch.tensor(0.0)))
 
     def test_chunk_length_change_and_reload_consistency(self):
         """Verify that modifying chunk_length dynamically recalculates all chunk boundaries without drift."""

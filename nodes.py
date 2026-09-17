@@ -1349,6 +1349,7 @@ class MiniMaxVideoChunkSlicerNode:
                 "audio": ("AUDIO",),
                 "fps": ("FLOAT", {"forceInput": True}),
                 "optional_first_frame_ref": ("IMAGE",),
+                "optional_prev_chunk_result": ("IMAGE",),
             }
         }
 
@@ -1357,7 +1358,22 @@ class MiniMaxVideoChunkSlicerNode:
         # Allow backward-compatibility with saved workflows that had shifted widget indices
         return True
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "SLICE_CONTEXT", "VHS_VIDEOINFO", "IMAGE", "FLOAT", "INT", "STRING", "IMAGE", "IMAGE")
+    RETURN_TYPES = (
+        "IMAGE",
+        "AUDIO",
+        "SLICE_CONTEXT",
+        "VHS_VIDEOINFO",
+        "IMAGE",
+        "FLOAT",
+        "INT",
+        "STRING",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+    )
     RETURN_NAMES = (
         "chunk_images",
         "chunk_audio",
@@ -1369,6 +1385,10 @@ class MiniMaxVideoChunkSlicerNode:
         "slice_info",
         "prev_last_frame",
         "prev_ref_frames",
+        "prev_edited_last_frame",
+        "prev_orig_last_frame",
+        "prev_edited_ref_frames",
+        "prev_orig_ref_frames",
     )
     FUNCTION = "slice_chunk"
     CATEGORY = "MiniMaxH3/VideoEdit"
@@ -1392,6 +1412,7 @@ class MiniMaxVideoChunkSlicerNode:
         audio: Optional[Dict[str, Any]] = None,
         fps: Optional[Any] = None,
         optional_first_frame_ref: Optional[torch.Tensor] = None,
+        optional_prev_chunk_result: Optional[torch.Tensor] = None,
         **kwargs,
     ):
         # Sanitize auto_advance (gracefully handle legacy workflows where 24 was stored)
@@ -1427,7 +1448,18 @@ class MiniMaxVideoChunkSlicerNode:
                 effective_fps = float(force_fps) if force_fps else 24.0
             except Exception:
                 effective_fps = 24.0
-        chunk_imgs, chunk_aud, ctx, info, prev_last_frame, prev_ref_frames = slice_video_and_audio(
+        (
+            chunk_imgs,
+            chunk_aud,
+            ctx,
+            info,
+            prev_last_frame,
+            prev_ref_frames,
+            prev_edited_last_frame,
+            prev_orig_last_frame,
+            prev_edited_ref_frames,
+            prev_orig_ref_frames,
+        ) = slice_video_and_audio(
             project_name=project_name,
             video_file=video_file,
             images=images,
@@ -1443,6 +1475,7 @@ class MiniMaxVideoChunkSlicerNode:
             prev_ref_frames_count=prev_ref_frames_count,
             first_chunk_ref_mode=first_chunk_ref_mode,
             optional_first_frame_ref=optional_first_frame_ref,
+            optional_prev_chunk_result=optional_prev_chunk_result,
             return_ref_frames=True,
         )
         ctx["auto_advance"] = auto_advance
@@ -1487,6 +1520,10 @@ class MiniMaxVideoChunkSlicerNode:
             info,
             prev_last_frame,
             prev_ref_frames,
+            prev_edited_last_frame,
+            prev_orig_last_frame,
+            prev_edited_ref_frames,
+            prev_orig_ref_frames,
         )
 
 
