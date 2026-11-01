@@ -1,7 +1,6 @@
 """Long Video Director & Streaming Chaining Pipeline for MiniMax H3.
 
-Coordinates multi-segment long video generation with Dual-Tier Prefix KV Caching
-(Permanent Anchor + Dynamic Rolling), timeline advancement, and audio-video stitching.
+Coordinates continuation sessions, keyframe fallback and prefix trimming.
 """
 
 from typing import Optional, Dict, Any, List, Tuple
@@ -141,6 +140,7 @@ class LongVideoSession:
         self.current_clip_index: int = 0
         self.last_rolling_steps: int = 0
         self.last_rolling_frames: int = 0
+        self.is_current_clip_trimmed: bool = False
         self.accumulated_video_latents: List[torch.Tensor] = []
         self.accumulated_audio_latents: List[torch.Tensor] = []
 
@@ -151,7 +151,8 @@ class LongVideoSession:
         previous_video_latent: Optional[torch.Tensor] = None,
         previous_audio_latent: Optional[torch.Tensor] = None,
         anchor_video_latent: Optional[torch.Tensor] = None,
-        text_context: Optional[Any] = None
+        text_context: Optional[Any] = None,
+        source_start_step: int = 0,
     ) -> Tuple[Any, List[Any]]:
         """Prepares model patcher and conditioning for the upcoming clip generation.
 
@@ -164,16 +165,19 @@ class LongVideoSession:
 
         tail_video = None
         tail_audio = None
+        self.last_rolling_steps = 0
+        self.last_rolling_frames = 0
+        self.is_current_clip_trimmed = False
         if previous_video_latent is not None:
             # Snap requested rolling frames to VIDEO_RUN_GRID (5, 22, 39, 56, 73, 90, 107, 124)
             snapped_frames = snap_to_run_grid(self.config.rolling_frames)
             total_steps = previous_video_latent.shape[2]
             rolling_steps = min(pixel_frames_to_latent_steps(snapped_frames), total_steps)
 
-            # Ensure start lands on cycle position 0 (start % 5 == 0) for consistent (1,4,4,4,4) phase
+            # Move the start forward to the next cycle boundary, keeping the tail.
             start = total_steps - rolling_steps
-            if start % 5 != 0:
-                adjusted_steps = rolling_steps - (start % 5)
+            if (source_start_step + start) % 5 != 0:
+                adjusted_steps = rolling_steps - ((-source_start_step - start) % 5)
                 if adjusted_steps > 0:
                     rolling_steps = adjusted_steps
                     start = total_steps - rolling_steps
@@ -212,7 +216,7 @@ class LongVideoSession:
         trim_prefix: bool = True
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Registers a completed clip into session history and advances clip index."""
-        rolling_steps = self.config.rolling_latent_frames if self.current_clip_index > 0 else 0
+        rolling_steps = self.last_rolling_steps
 
         delivered_video = trim_prefix_frames(video_latent, rolling_steps) if trim_prefix else video_latent
         self.accumulated_video_latents.append(delivered_video)
@@ -235,5 +239,8 @@ class LongVideoSession:
         self.cache_manager.clear_all()
         self.cursor_tracker.reset()
         self.current_clip_index = 0
+        self.last_rolling_steps = 0
+        self.last_rolling_frames = 0
+        self.is_current_clip_trimmed = False
         self.accumulated_video_latents.clear()
         self.accumulated_audio_latents.clear()

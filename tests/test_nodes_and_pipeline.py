@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import inspect
 import torch
 
 _repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +34,8 @@ class TestNodesAndPipeline(unittest.TestCase):
             "Native Masked AV (Recommended)",
             "Safe Native (Fallback)",
         ])
-        self.assertEqual(frame_choices, ["39", "90", "141", "192"])
+        self.assertIn("22", frame_choices)
+        self.assertEqual([int(f) for f in frame_choices], list(range(5, 193, 17)))
         (cfg,) = cfg_node.create_config(
             cache_mode="Native Masked AV (Recommended)",
             continuation_frames="39",
@@ -45,7 +47,10 @@ class TestNodesAndPipeline(unittest.TestCase):
 
     def test_applier_exposes_only_continuation_inputs(self):
         optional = nodes.MiniMaxPrefixCacheApplierNode.INPUT_TYPES()["optional"]
-        self.assertEqual(set(optional), {"cache_config", "context_latent", "target_latent"})
+        self.assertEqual(set(optional), {"cache_config", "context_latent", "target_latent", "identity_latent", "continuation_model", "vae"})
+        parameters = inspect.signature(nodes.MiniMaxPrefixCacheApplierNode.apply_cache).parameters
+        self.assertFalse(any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()))
+        self.assertTrue({"anchor_latent", "context_video_latent", "anchor_video_latent", "context_audio", "session"}.isdisjoint(parameters))
 
     def test_av_latent_pack_unpack(self):
         v = torch.randn(1, 24, 10, 16, 16)
@@ -70,6 +75,12 @@ class TestNodesAndPipeline(unittest.TestCase):
             v = torch.randn(1, 24, 7, 16, 16)
             a = torch.randn(1, 32, 2, 11)
             original_latent = nodes.pack_av_latent(v, a)
+            original_latent.update(minimax_video_start_step=12, minimax_audio_start_tick=65,
+                                  minimax_identity_anchor=v[:, :, :1].clone())
+            original_latent["minimax_identity_refs"] = [
+                {"kind": "image", "latent": torch.randn(1, 24, 1, 4, 4), "latent_h": 4, "latent_w": 4},
+                {"kind": "image", "latent": torch.randn(1, 24, 1, 6, 8), "latent_h": 6, "latent_w": 8},
+            ]
 
             save_node = nodes.MiniMaxSaveLatentNode()
             saved_path, info = save_node.save(
@@ -87,6 +98,13 @@ class TestNodesAndPipeline(unittest.TestCase):
             )
             self.assertEqual(loaded_path, saved_path)
             lv, la = nodes._unpack_latent(loaded_latent)
+            self.assertEqual(loaded_latent["minimax_video_start_step"], 12)
+            self.assertEqual(loaded_latent["minimax_audio_start_tick"], 65)
+            self.assertTrue(torch.equal(loaded_latent["minimax_identity_anchor"], v[:, :, :1]))
+            self.assertEqual(len(loaded_latent["minimax_identity_refs"]), 2)
+            for before, after in zip(original_latent["minimax_identity_refs"], loaded_latent["minimax_identity_refs"]):
+                self.assertTrue(torch.equal(before["latent"], after["latent"]))
+                self.assertEqual(before["latent_w"], after["latent_w"])
             self.assertEqual(lv.shape, v.shape)
             if la is not None:
                 self.assertEqual(la.shape, a.shape)
@@ -191,6 +209,10 @@ class TestNodesAndPipeline(unittest.TestCase):
         nodes_dict = {n["id"]: n for n in wf.get("nodes", [])}
         links_dict = {l[0]: l for l in wf.get("links", []) if l}
         for nid, n in nodes_dict.items():
+            if n.get("type") == "MiniMaxPrefixCacheApplier":
+                current = nodes.MiniMaxPrefixCacheApplierNode.INPUT_TYPES()
+                allowed = set(current["required"]) | set(current["optional"])
+                self.assertTrue({inp["name"] for inp in n.get("inputs", [])} <= allowed)
             for slot, inp in enumerate(n.get("inputs", [])):
                 lid = inp.get("link")
                 if lid is not None:

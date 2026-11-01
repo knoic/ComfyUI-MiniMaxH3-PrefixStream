@@ -18,8 +18,9 @@
 - 🧩 **低侵入地兼容原生 H3 工作流**：不改动 ComfyUI 源码，也不 monkey-patch H3 DiT block。沿用原有模型、提示词、采样和解码节点，只增加续写所需的少量节点。
 - 🛡️ **默认使用 Native Masked AV**：将上一段干净的视频/音频 latent 直接写入下一段开头，并用 ComfyUI 原生遮罩保护；视频、音频各自独立控制。`Safe Native` 保留为兼容性备选。
 - 🗂️ **可视化接力素材箱**：自动归档片段预览、评分、镜头标签、提示词及前后镜头血缘；在画廊中按画面和评分选择任意历史片段，直接接力，而不是靠文件名猜测。
-- 🎯 **准确且可控的上下文**：使用 H3 兼容的 `39 / 90 / 141 / 192 / ...` 帧网格。默认 39 帧约为 1.625 秒，并精确对应 65 个音频 latent tick。
+- 🎯 **准确且可控的上下文**：支持 H3 的 `5 / 22 / 39 / 56 / ... / 192` 帧网格。22 帧对应 7 个视频 latent 和 37 个音频 tick；默认 39 帧对应 12 和 65。
 - 🔒 **减少续写冲突**：移除受保护开头内的关键帧，避免第 0 帧引导与复制的 latent 上下文相互冲突；后续端点和参考条件仍可正常使用。
+- 🖼️ **保留整组原生图片参考**：随片段保存用户提供的图片参考，续写时缺失才恢复；当前参考优先，不自动将生成首帧或关键帧转换成新参考。支持 `identity_latent` 显式补接图片，以及保存、素材箱和裁切后的时序状态传递。
 
 ---
 
@@ -55,7 +56,7 @@
 ## 工作原理
 
 ```text
-上一段完整音视频 latent ──► 选择规范的 39/90/141/... 帧尾部
+上一段完整音视频 latent ──► 选择规范的 5/22/39/56/... 帧尾部
                                       │
 目标空音视频 latent ───────────────────┼──► 将尾部复制到目标开头
                                       └──► noise_mask =（视频遮罩，音频遮罩）
@@ -75,7 +76,7 @@
 | **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | 选择默认的 `Native Masked AV` 或备选的 `Safe Native`，并设置用户可见的视频上下文长度。 |
 | **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | 构建原生视频/音频遮罩并输出 `masked_latent`；在备选模式下应用避免冲突的关键帧条件。 |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | 在像素和音频波形空间裁切开头的重叠帧，避免 VAE 因果闪烁并保持同步。 |
-| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | 在像素和音频波形空间无缝拼接长视频与新片段，具备自适应亮度匹配、重叠区等功率余弦交叉淡入淡出（消除爆音与相位梳状滤波）及防二次裁剪守卫。 |
+| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | 在像素和音频波形空间无缝拼接长视频与新片段，具备自适应亮度匹配、重叠区不增益的余弦交叉淡化及防二次裁剪守卫。 |
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | 独立地将联合音视频 latent 保存为 safetensors，无外部依赖。 |
 | **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | 独立加载带有元数据的联合音视频 latent，用于多片段连续流式生成。 |
 | **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | 连同预览图、评分、镜头标签、提示词和续写血缘归档生成片段。 |

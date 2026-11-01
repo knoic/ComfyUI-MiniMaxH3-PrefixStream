@@ -15,6 +15,7 @@ from typing import Dict, Any, Tuple, Optional
 import torch
 
 try:
+    from safetensors import safe_open
     from safetensors.torch import load_file as st_load, save_file as st_save
 except ImportError:
     try:
@@ -28,6 +29,7 @@ except ImportError:
 logger = logging.getLogger("minimax_prefix_stream")
 
 try:
+    from .engine.continuation_state import encode_state, decode_state, prepare_identity_references, ANCHOR_KEY
     from .engine.cache_manager import (
         KVCacheConfig,
         PrefixKVCacheManager,
@@ -36,7 +38,8 @@ try:
     )
     from .pipeline.long_video_director import LongVideoSession
     from .pipeline.disk_stream import MiniMaxDiskVideoStreamNode
-    from .pipeline.native_masked_av import apply_native_masked_av
+    from .pipeline.native_masked_av import apply_native_masked_av, latent_boundaries
+    from .pipeline.context_noise import encode_noisy_prefix
     from .pipeline.seam_protector import (
         audio_equal_power_crossfade,
         latent_soft_blend,
@@ -73,6 +76,7 @@ try:
         standardize_audio_dict,
     )
 except (ImportError, ValueError):
+    from engine.continuation_state import encode_state, decode_state, prepare_identity_references, ANCHOR_KEY
     from engine.cache_manager import (
         KVCacheConfig,
         PrefixKVCacheManager,
@@ -81,7 +85,8 @@ except (ImportError, ValueError):
     )
     from pipeline.long_video_director import LongVideoSession
     from pipeline.disk_stream import MiniMaxDiskVideoStreamNode
-    from pipeline.native_masked_av import apply_native_masked_av
+    from pipeline.native_masked_av import apply_native_masked_av, latent_boundaries
+    from pipeline.context_noise import encode_noisy_prefix
     from pipeline.seam_protector import (
         audio_equal_power_crossfade,
         latent_soft_blend,
@@ -146,9 +151,9 @@ class MiniMaxPrefixCacheConfigNode:
                     "default": "Native Masked AV (Recommended)",
                     "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 是短片段或旧工作流的兼容备选。"
                 }),
-                "continuation_frames": (["39", "90", "141", "192"], {
+                "continuation_frames": (["5", "22", "39", "56", "73", "90", "107", "124", "141", "158", "175", "192"], {
                     "default": "39",
-                    "tooltip": "用户可见的视频续写上下文帧数。39 帧约 1.625 秒；较长选项会自动下取整到精确音视频公共边界。"
+                    "tooltip": "按 H3 的 17k+5 帧网格复制并冻结前缀。22 帧对应参考工作流的 7 个视频 latent / 37 个音频 tick；39 帧对应 12 / 65。"
                 }),
             },
             "optional": {
@@ -157,11 +162,19 @@ class MiniMaxPrefixCacheConfigNode:
                     "Full Previous Tail"
                 ], {
                     "default": "Match Video Handover",
-                    "tooltip": "Match Video Handover 保证音频保护区与视频严格 100% 对齐（杜绝 0.7s 重音复读与累积音画失步）；Full Previous Tail 保留上一段完整尾部音频。"
+                    "tooltip": "Match Video Handover 按视频交接位置截取音频；Full Previous Tail 也保留被视频舍弃的尾部声音，可能导致音画交接位置不同。"
                 }),
                 "audio_feather_ticks": ("INT", {
-                    "default": 2, "min": 0, "max": 16, "step": 1,
-                    "tooltip": "音频掩码交界处的平滑余弦过渡步数（40Hz Latent 周期，推荐 2~4 步，杜绝 SDE/DiT 掩码跳变爆音）"
+                    "default": 0, "min": 0, "max": 16, "step": 1,
+                    "tooltip": "音频前缀末尾允许重新生成的 tick 数。0 完全保护；大于 0 会释放部分音频，可能改变交接声音。开启 reference_noise 时强制为 0。"
+                }),
+                "video_context_denoise": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "实验项：0 完全冻结视频前缀；大于 0 使用原生软遮罩允许修正历史上下文。可对比 0/0.03/0.06；可能改善历史斑纹，也可能破坏接缝和运动一致性，尚无 H3 画质验证。"
+                }),
+                "reference_noise": ("BOOLEAN", {
+                    "default": False, "label_on": "开启", "label_off": "关闭",
+                    "tooltip": "参考帧渐变注噪：所有档位均从 0.4 平滑降至末帧 0。使用带噪/干净两次 VAE 编码的差值作用于原始 latent，避免直接替换造成额外编码偏差。音频前缀硬保护。需接视频 vae 和上一段完整 latent；仅支持 Native Masked AV。"
                 }),
             }
         }
@@ -176,7 +189,9 @@ class MiniMaxPrefixCacheConfigNode:
         cache_mode: str = "Native Masked AV (Recommended)",
         continuation_frames: Any = "39",
         audio_tail_carryover: str = "Match Video Handover",
-        audio_feather_ticks: int = 2,
+        audio_feather_ticks: int = 0,
+        video_context_denoise: float = 0.0,
+        reference_noise: bool = False,
         **kwargs
     ) -> Tuple[KVCacheConfig]:
         # Accept a saved legacy rolling_frames value if an old workflow sends it.
@@ -190,7 +205,9 @@ class MiniMaxPrefixCacheConfigNode:
             cache_mode=cache_mode,
             rolling_frames=r_frames,
             audio_tail_carryover=audio_tail_carryover,
-            audio_feather_ticks=int(audio_feather_ticks)
+            audio_feather_ticks=int(audio_feather_ticks),
+            video_context_denoise=float(video_context_denoise),
+            reference_noise=bool(reference_noise),
         )
         return (config,)
 
@@ -348,6 +365,9 @@ class MiniMaxPrefixCacheApplierNode:
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
                 "context_latent": ("LATENT", {"tooltip": "上一段完整的 H3 音视频 LATENT。首段生成时留空。"}),
                 "target_latent": ("LATENT", {"tooltip": "连接 MiniMaxH3ReferenceToVideo 的目标 LATENT；Native Masked AV 会输出带独立音视频 noise_mask 的采样 latent。"}),
+                "identity_latent": ("LATENT", {"tooltip": "可选的固定人物/外观参考：原始参考图经 H3 VAE 编码的 latent，或首段完整 latent（仅取首帧）。续写时作为独立参考，不覆盖运动前缀。"}),
+                "continuation_model": ("MODEL", {"tooltip": "可选，仅在有 context_latent 的续写段使用。可连接经原生 LoRA 节点加载纠偏 LoRA 的模型；首段仍使用 model。不会自动下载或加载 LoRA。"}),
+                "vae": ("VAE", {"tooltip": "仅开启 reference_noise 时需要，连接原生 H3 视频 VAE。关闭注噪时不使用。"}),
             }
         }
 
@@ -363,28 +383,48 @@ class MiniMaxPrefixCacheApplierNode:
         cache_config: Optional[KVCacheConfig] = None,
         context_latent: Optional[Dict[str, Any]] = None,
         target_latent: Optional[Dict[str, Any]] = None,
-        **legacy: Any,
+        identity_latent: Optional[Dict[str, Any]] = None,
+        continuation_model: Optional[Any] = None,
+        vae: Optional[Any] = None,
     ) -> Tuple[Any, Any, LongVideoSession, Optional[Dict[str, Any]]]:
         cfg = cache_config or KVCacheConfig()
-        session = legacy.get("session")
-        sess = session or LongVideoSession(cfg)
-        if session is not None and cache_config is not None:
-            sess.config = cfg
-
-        # Legacy aliases are accepted only for previously saved workflows; they
-        # are intentionally absent from the user-facing node interface.
-        ctx_target = context_latent if context_latent is not None else legacy.get("context_video_latent")
+        sess = LongVideoSession(cfg)
+        ctx_target = context_latent
+        if cfg.reference_noise and ctx_target is not None:
+            if not cfg.is_native_masked_av_mode():
+                raise ValueError("参考帧注噪需要 Native Masked AV 模式")
+            if vae is None:
+                raise ValueError("开启 reference_noise 后，请将 H3 视频 VAE 连接到 Applier 的 vae 输入")
+            if int(ctx_target.get("minimax_video_start_step", 0)) != 0:
+                raise ValueError("参考帧注噪需要上一段完整 latent，请使用采样器完整输出而非裁切后的 latent")
+        if ctx_target is not None and continuation_model is not None:
+            model = continuation_model
 
         # Unpack video and audio from latents (supports ComfyUI NestedTensor from H3ContinuousLoadLatent)
         v_ctx, a_ctx_from_latent = _unpack_latent(ctx_target)
         a_ctx = a_ctx_from_latent
+        anchor = None
+        if identity_latent is not None:
+            anchor = identity_latent.get(ANCHOR_KEY)
+            if anchor is None:
+                anchor, _ = _unpack_latent(identity_latent)
+            if anchor is None or anchor.ndim != 5:
+                raise ValueError("identity_latent requires an H3 video latent [B, C, T, H, W]")
+            anchor = anchor[:, :, :1].clone()
+        conditioning, reference_state = prepare_identity_references(conditioning, ctx_target, anchor)
+        if target_latent is not None:
+            target_latent = dict(target_latent)
+            target_latent.pop(ANCHOR_KEY, None)
+            target_latent["minimax_video_start_step"] = 0
+            target_latent["minimax_audio_start_tick"] = 0
+            target_latent.update(reference_state)
 
         def safe_native_result(reason: Optional[Exception] = None):
             """Run the compatibility path when a native AV mask cannot be built."""
             if reason is not None:
                 logger.warning(
                     "[Native Masked AV] %s Falling back to Safe Native for this clip; "
-                    "use a source and target of at least 39 frames to enable native masks.",
+                    "use at least 5 source frames and a target longer than 5 frames to enable native masks.",
                     reason,
                 )
             patched_model, out_cond = sess.prepare_next_clip(
@@ -393,11 +433,15 @@ class MiniMaxPrefixCacheApplierNode:
                 previous_video_latent=v_ctx,
                 previous_audio_latent=a_ctx,
                 anchor_video_latent=None,
+                source_start_step=int(ctx_target.get("minimax_video_start_step", 0)) if ctx_target else 0,
             )
             return (patched_model, out_cond, sess, target_latent)
 
         if cfg.is_native_masked_av_mode():
             if ctx_target is None:
+                sess.last_rolling_steps = 0
+                sess.last_rolling_frames = 0
+                sess.is_current_clip_trimmed = False
                 logger.info("[Native Masked AV] Initial clip: target latent passes through without a protected prefix.")
                 return (model, conditioning, sess, target_latent)
             if target_latent is None:
@@ -416,8 +460,6 @@ class MiniMaxPrefixCacheApplierNode:
                 target_video.shape[2], latent_steps_to_pixel_frames(target_video.shape[2]),
             )
             _require_native_masked_av_support()
-            carryover_mode = legacy.get("audio_tail_carryover", getattr(cfg, "audio_tail_carryover", "Match Video Handover"))
-            feather_ticks = int(legacy.get("audio_feather_ticks", getattr(cfg, "audio_feather_ticks", 2)))
             sess.is_current_clip_trimmed = False
             try:
                 out_v, out_a, video_mask, audio_mask, plan = apply_native_masked_av(
@@ -426,18 +468,28 @@ class MiniMaxPrefixCacheApplierNode:
                     source_video=v_ctx,
                     source_audio=a_ctx_from_latent,
                     context_frames=cfg.rolling_frames,
-                    audio_tail_carryover=carryover_mode,
-                    audio_feather_ticks=feather_ticks,
+                    audio_tail_carryover=cfg.audio_tail_carryover,
+                    audio_feather_ticks=0 if cfg.reference_noise else cfg.audio_feather_ticks,
+                    source_start_step=int(ctx_target.get("minimax_video_start_step", 0)),
+                    source_audio_start_tick=int(ctx_target.get("minimax_audio_start_tick", 0)),
+                    video_context_denoise=cfg.video_context_denoise,
                 )
             except ValueError as exc:
+                if cfg.reference_noise:
+                    raise
                 geometry_errors = (
-                    "at least 39 source frames",
+                    "at least 5 source frames",
                     "consume the whole target",
                     "has no phase-aligned",
                 )
                 if any(text in str(exc) for text in geometry_errors):
                     return safe_native_result(exc)
                 raise
+            if cfg.reference_noise:
+                prefix = encode_noisy_prefix(vae, v_ctx, plan)
+                out_v[:, :, :plan["context_steps"]] = prefix.to(out_v)
+                logger.info("Reference noise: %d frames, cosine 0.4 to final pixel frame 0, paired-encode delta and hard audio prefix.",
+                            plan["actual_context_frames"])
             masked_latent = pack_av_latent(out_v, out_a, target_latent)
             masked_latent["noise_mask"] = _pack_nested_streams(video_mask, audio_mask)
             masked_latent["minimax_prefix_frames"] = int(plan["actual_context_frames"])
@@ -462,7 +514,7 @@ class MiniMaxTrimPrefixLatentNode:
     
     SUPPORTED MODES:
     1. Pixel & Waveform Space (RECOMMENDED): Connect decoded 'images' and 'audio'.
-       Trims leading frames directly in pixel space, guaranteeing ZERO VAE flicker and ZERO color distortion!
+       Trims decoded frames without another VAE encode/decode pass.
     2. Latent Space: Connect 'latent'. Trims raw latent steps.
     """
 
@@ -561,6 +613,10 @@ class MiniMaxTrimPrefixLatentNode:
                 v = target_latent.get("samples")
 
             if v is not None:
+                source_step = int(target_latent.get("minimax_video_start_step", 0))
+                if actual_trim_frames > 0:
+                    bounds = latent_boundaries(v.shape[2], source_step)
+                    trim_steps = next((i for i, end in enumerate(bounds) if end >= actual_trim_frames), v.shape[2])
                 if trim_steps > 0:
                     trimmed_v = v[:, :, trim_steps:]
                 else:
@@ -568,13 +624,16 @@ class MiniMaxTrimPrefixLatentNode:
                 trimmed_a = None
                 if a_from_latent is not None:
                     if trim_steps > 0:
-                        eff_frames = actual_trim_frames if actual_trim_frames > 0 else latent_steps_to_pixel_frames(trim_steps)
-                        audio_trim_steps = min(int(round(eff_frames * 40.0 / 24.0)), a_from_latent.shape[-1])
+                        end_frame = latent_boundaries(source_step + trim_steps)[-1]
+                        audio_origin = int(target_latent.get("minimax_audio_start_tick", 0))
+                        audio_trim_steps = min(max(0, round(end_frame * 40.0 / 24.0) - audio_origin), a_from_latent.shape[-1])
                         trimmed_a = trim_audio_latents(a_from_latent, audio_trim_steps)
                     else:
                         trimmed_a = a_from_latent
                 out_latent = pack_av_latent(trimmed_v, trimmed_a, original_dict=target_latent)
                 if trim_steps > 0:
+                    out_latent["minimax_video_start_step"] = int(target_latent.get("minimax_video_start_step", 0)) + min(trim_steps, v.shape[2])
+                    out_latent["minimax_audio_start_tick"] = int(target_latent.get("minimax_audio_start_tick", 0)) + (audio_trim_steps if a_from_latent is not None else 0)
                     out_latent.pop("noise_mask", None)
                     out_latent["minimax_prefix_frames"] = 0
             else:
@@ -594,7 +653,7 @@ class MiniMaxLongVideoStitcherNode:
 
     Applies:
     1. Zero-VAE-distortion pixel-space joining with luminance gain matching and smooth cosine S-curve crossfade.
-    2. Waveform-space sample-accurate audio concatenation with linear overlap crossfade (zero click/pop).
+    2. Waveform-space sample-accurate audio concatenation with complementary cosine overlap gains.
     3. Handles initial clip mode gracefully when prev_images or prev_audio is empty or None.
     """
 
@@ -806,6 +865,8 @@ class MiniMaxSaveLatentNode:
         tensors = {"video": video_cpu}
         if audio_cpu is not None:
             tensors["audio"] = audio_cpu
+        state_tensors, state_metadata = encode_state(latent)
+        tensors.update(state_tensors)
 
         frame_count = latent_steps_to_pixel_frames(video_cpu.shape[2])
 
@@ -819,9 +880,11 @@ class MiniMaxSaveLatentNode:
                     "clip_index": str(clip_index),
                     "video_shape": json.dumps(list(video_cpu.shape)),
                     "audio_shape": json.dumps(list(audio_cpu.shape)) if audio_cpu is not None else "none",
+                    **state_metadata,
                 }
             )
         else:
+            tensors["minimax_metadata"] = state_metadata
             torch.save(tensors, full_path)
 
         info_str = f"{frame_count} frames | Video {tuple(video_cpu.shape)}"
@@ -901,6 +964,8 @@ class MiniMaxLoadLatentNode:
 
         if st_load is not None:
             tensors = st_load(target_file, device="cpu")
+            with safe_open(target_file, framework="pt", device="cpu") as stored:
+                state_metadata = stored.metadata() or {}
         else:
             try:
                 tensors = torch.load(target_file, map_location="cpu")
@@ -918,6 +983,7 @@ class MiniMaxLoadLatentNode:
         audio = tensors.get("audio", None)
 
         out_latent = pack_av_latent(video, audio)
+        out_latent.update(decode_state(tensors, state_metadata if st_load is not None else tensors.get("minimax_metadata", {})))
         frame_count = latent_steps_to_pixel_frames(video.shape[2])
         info_str = f"{frame_count} frames | Video {tuple(video.shape)}"
         if audio is not None:
@@ -1030,6 +1096,7 @@ class MiniMaxClipBinSaverNode:
             raw_video_source=video_file_name,
             audio_dict=audio,
             save_video=save_video,
+            continuation_state=latent,
         )
 
         preview_tensor = pil_to_tensor(preview_pil)
@@ -1178,6 +1245,7 @@ class MiniMaxClipBinPickerNode:
 
         video, audio, tail_tensor, first_tensor, meta_dict = load_clip_asset(p_name, target_clip_id)
         out_latent = pack_av_latent(video, audio)
+        out_latent.update(decode_state(meta_dict, meta_dict))
 
         prompt_str = meta_dict.get("prompt", "")
         frames = meta_dict.get("frames", latent_steps_to_pixel_frames(video.shape[2]))

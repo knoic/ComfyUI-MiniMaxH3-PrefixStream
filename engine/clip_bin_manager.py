@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import torch
+from .continuation_state import encode_state, decode_state
 try:
     import numpy as np
 except ImportError:
@@ -106,6 +107,9 @@ class ClipMeta:
     has_video: bool = False
     video_file: Optional[str] = None
     notes: Optional[str] = None
+    minimax_video_start_step: int = 0
+    minimax_audio_start_tick: int = 0
+    minimax_identity_refs_json: str = "[]"
 
 
 def get_base_bin_dir() -> str:
@@ -374,12 +378,14 @@ def resolve_source_video_path(val: Any) -> Optional[str]:
         elif c_lower.endswith(NON_VIDEO_EXTENSIONS):
             # VHS sometimes outputs companion image first: e.g. h3_00024.png -> search h3_00024.mp4 / h3_00024-audio.mp4
             stem, _ = os.path.splitext(c)
-            for ext in [".mp4", "-audio.mp4", ".webm", ".mov"]:
+            for ext in ["-audio.mp4", ".mp4", "-audio.webm", ".webm", "-audio.mov", ".mov"]:
                 derived_candidates.append(stem + ext)
         else:
-            for ext in [".mp4", "-audio.mp4", ".webm"]:
+            for ext in ["-audio.mp4", ".mp4", "-audio.webm", ".webm"]:
                 derived_candidates.append(c + ext)
 
+    # VHS returns the silent intermediate before the muxed audio video.
+    video_candidates.sort(key=lambda c: not os.path.splitext(c)[0].lower().endswith("-audio"))
     search_list = video_candidates + derived_candidates
 
     for c in search_list:
@@ -535,6 +541,7 @@ def save_clip_asset(
     audio_dict: Optional[Dict[str, Any]] = None,
     save_video: bool = True,
     fps: float = 24.0,
+    continuation_state: Optional[Dict[str, Any]] = None,
 ) -> Tuple[ClipMeta, str, Image.Image]:
     """Packages and persists a complete MiniMax Clip Bin asset.
     
@@ -566,6 +573,8 @@ def save_clip_asset(
     tensors = {"video": video_cpu}
     if audio_cpu is not None:
         tensors["audio"] = audio_cpu
+    state_tensors, state_metadata = encode_state(continuation_state or {})
+    tensors.update(state_tensors)
 
     meta_obj = ClipMeta(
         clip_id=clip_id,
@@ -581,7 +590,10 @@ def save_clip_asset(
         video_shape=list(video_cpu.shape),
         audio_shape=list(audio_cpu.shape) if audio_cpu is not None else None,
         parent_clip_id=parent_clip_id if parent_clip_id else None,
-        associated_video_path=associated_video_path
+        associated_video_path=associated_video_path,
+        minimax_video_start_step=int(state_metadata["minimax_video_start_step"]),
+        minimax_audio_start_tick=int(state_metadata["minimax_audio_start_tick"]),
+        minimax_identity_refs_json=state_metadata["minimax_identity_refs_json"],
     )
 
     if st_save is not None:
@@ -594,6 +606,7 @@ def save_clip_asset(
                 "shot_tag": shot_tag,
                 "frame_count": str(frame_count),
                 "created_at": time_display,
+                **state_metadata,
             }
         )
     else:
@@ -737,6 +750,7 @@ def load_clip_asset(project_name: str, clip_id: str) -> Tuple[torch.Tensor, Opti
         except Exception:
             pass
 
+    meta_dict.update(decode_state(tensors, meta_dict))
     return video, audio, tail_tensor, first_tensor, meta_dict
 
 

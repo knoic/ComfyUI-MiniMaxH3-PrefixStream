@@ -85,6 +85,25 @@ class AVRegressions(unittest.TestCase):
 
 
 class StorageRegressions(unittest.TestCase):
+    def test_clip_bin_roundtrips_identity_and_temporal_origin(self):
+        video = torch.randn(1, 24, 25, 2, 2)
+        audio = torch.randn(1, 32, 2, 142)
+        identity = torch.randn(1, 24, 1, 2, 2)
+        state = dict(minimax_video_start_step=12, minimax_audio_start_tick=65,
+                     minimax_identity_anchor=identity)
+        state["minimax_identity_refs"] = [
+            {"kind": "image", "latent": identity, "latent_h": 2, "latent_w": 2},
+            {"kind": "image", "latent": identity + 1, "latent_h": 2, "latent_w": 2},
+        ]
+        meta, _, _ = bins.save_clip_asset(video, audio, None, "StateProject", save_video=False,
+                                         continuation_state=state)
+        _, _, _, _, loaded = bins.load_clip_asset("StateProject", meta.clip_id)
+        self.assertEqual(loaded["minimax_video_start_step"], 12)
+        self.assertEqual(loaded["minimax_audio_start_tick"], 65)
+        self.assertTrue(torch.equal(loaded["minimax_identity_anchor"], identity))
+        self.assertEqual(len(loaded["minimax_identity_refs"]), 2)
+        self.assertTrue(torch.equal(loaded["minimax_identity_refs"][1]["latent"], identity + 1))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="minimax_regression_")
         folder_paths = types.ModuleType("folder_paths")

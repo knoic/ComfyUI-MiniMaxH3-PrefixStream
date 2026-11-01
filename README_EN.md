@@ -18,7 +18,8 @@ It integrates with existing native MiniMax H3 workflows with minimal intrusion: 
 - 🧩 **Low-intrusion native H3 integration**: Does not modify ComfyUI source files or monkey-patch H3 DiT blocks. Keep your existing model, prompt, sampling, and decoding nodes; add only the few nodes needed for continuation.
 - 🛡️ **Native Masked AV by default**: Writes clean video/audio latents from the previous clip into the head of the next target and protects them with native ComfyUI masks. Video and audio are controlled independently. `Safe Native` is retained as the compatibility fallback.
 - 🗂️ **Visual continuation media library**: Archives clip previews, ratings, shot tags, prompts, and parent-child lineage. Choose any historical clip by image and rating from a gallery instead of guessing from filenames.
-- 🎯 **Precise, controllable context**: Uses the H3-compatible `39 / 90 / 141 / 192 / ...` frame grid. The default 39-frame context is about 1.625 seconds and maps exactly to 65 audio-latent ticks.
+- 🎯 **Precise, controllable context**: Supports H3's `5 / 22 / 39 / 56 / ... / 192` frame grid. A 22-frame context copies 7 video steps and 37 audio ticks; the default 39-frame context copies 12 and 65.
+- 🖼️ **Persistent native image references**: Preserves the complete supplied image-reference bank across AV files and Clip Bin assets, restoring it only when current image references are absent. Generated frames and keyframes are not silently converted into references; `identity_latent` explicitly adds an image. Trimmed latents retain their video phase and audio origin.
 - 🔒 **Reduced continuation conflicts**: Removes keyframes inside the protected head so a frame-0 guide cannot conflict with copied latent context. Later endpoint and reference conditioning remain available.
 
 ---
@@ -55,7 +56,7 @@ Native MiniMax H3 workflow → generate current clip → automatically archive t
 ## How It Works
 
 ```text
-Previous full AV latent ──► select the canonical 39/90/141/... frame tail
+Previous full AV latent ──► select the canonical 5/22/39/56/... frame tail
                                       │
 Target empty AV latent ───────────────┼──► copy tail into the target head
                                       └──► noise_mask = (video mask, audio mask)
@@ -75,7 +76,7 @@ Target empty AV latent ───────────────┼──►
 | **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | Selects default `Native Masked AV` or fallback `Safe Native`, and sets the user-visible video context length. |
 | **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | Builds native video/audio masks and outputs `masked_latent`; applies collision-safe keyframe conditioning in fallback mode. |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, avoiding VAE causal flicker while retaining sync. |
-| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly stitches accumulated long video and new clips in pixel and audio waveform space with luminance matching, equal-power audio crossfade, and double-trim safety guards. |
+| **`MiniMax Long Video Stitcher`** | `MiniMaxH3/PrefixStream` | Seamlessly stitches accumulated long video and new clips in pixel and audio waveform space with luminance matching, unity-gain audio crossfade, and double-trim safety guards. |
 | **`MiniMax Save AV Latent`** | `MiniMaxH3/PrefixStream` | Saves joint audiovisual latents to safetensors without external dependencies. |
 | **`MiniMax Load AV Latent`** | `MiniMaxH3/PrefixStream` | Loads joint audiovisual latents and their metadata for multi-clip continuous streaming. |
 | **`MiniMax H3 Clip Bin Saver`** | `MiniMaxH3/PrefixStream` | Archives a generated clip with its preview, rating, shot tag, prompt, and continuation lineage. |

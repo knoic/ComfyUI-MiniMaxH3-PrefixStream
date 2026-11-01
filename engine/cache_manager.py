@@ -69,7 +69,9 @@ class KVCacheConfig:
     anchor_frames: int = 5            # Real video frames for anchor (default 5 frames = 2 latent steps)
     temporal_stride: int = 1          # 1 = keep all, 2 = 2x temporal sub-sampling
     audio_tail_carryover: str = "Match Video Handover"  # "Match Video Handover" or "Full Previous Tail"
-    audio_feather_ticks: int = 2                       # Smooth cosine mask transition ticks (40Hz audio latent)
+    audio_feather_ticks: int = 0                       # 0 preserves the full inherited audio prefix
+    video_context_denoise: float = 0.0                 # Experimental native prefix refinement; 0 keeps the exact prefix
+    reference_noise: bool = False                     # Cosine pixel noise with a clean terminal H3 unit
 
     # Internal overrides / compatibility
     _rolling_latent_frames: Optional[int] = None

@@ -21,6 +21,7 @@ from engine.clip_bin_manager import (
     tensor_to_pil,
     pil_to_tensor,
     delete_clip_asset,
+    resolve_source_video_path,
 )
 
 
@@ -354,6 +355,43 @@ class TestClipBin(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+
+    def test_clip_bin_saver_prefers_vhs_audio_video(self):
+        temp_dir = setup_temp_folder_paths()
+        try:
+            latent = nodes.pack_av_latent(torch.zeros(1, 16, 4, 16, 16), None)
+            for extension in (".mp4", ".webm", ".mov"):
+                for save_output in (True, False):
+                    with self.subTest(extension=extension, save_output=save_output):
+                        silent = os.path.join(temp_dir, "clip" + extension)
+                        muxed = os.path.join(temp_dir, "clip-audio" + extension)
+                        with open(silent, "wb") as f:
+                            f.write(b"silent video")
+                        with open(muxed, "wb") as f:
+                            f.write(b"video with audio")
+                        filenames = (save_output, [os.path.join(temp_dir, "clip.png"), silent, muxed])
+                        result = nodes.MiniMaxClipBinSaverNode().save_clip(
+                            latent=latent,
+                            project_name="VHSAudioTest",
+                            shot_tag="Shot 1",
+                            rating=5,
+                            video_file_name=filenames,
+                            save_video=True,
+                        )
+                        clip_dir = result["result"][2]
+                        with open(os.path.join(clip_dir, "video" + extension), "rb") as f:
+                            self.assertEqual(f.read(), b"video with audio")
+                        with open(os.path.join(clip_dir, "meta.json"), encoding="utf-8") as f:
+                            self.assertEqual(json.load(f)["associated_video_path"], os.path.basename(muxed))
+
+                        # An explicit path still selects exactly that file.
+                        self.assertEqual(resolve_source_video_path(silent), silent)
+                        self.assertEqual(resolve_source_video_path(os.path.join(temp_dir, "clip.png")), muxed)
+                        os.remove(muxed)
+                        self.assertEqual(resolve_source_video_path(filenames), silent)
+                        os.remove(silent)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_clip_bin_saver_auto_encode_video_from_images(self):
         temp_dir = setup_temp_folder_paths()

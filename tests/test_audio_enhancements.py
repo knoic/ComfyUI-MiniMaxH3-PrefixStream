@@ -36,7 +36,7 @@ class AudioEnhancementsTests(unittest.TestCase):
         self.assertEqual(fit_audio_length(w, 50).shape[-1], 50)
         self.assertEqual(fit_audio_length(w, 0).shape[-1], 0)
 
-    def test_stitch_audio_waveforms_equal_power_and_clamping(self):
+    def test_identical_audio_overlap_does_not_amplify_or_clip(self):
         sr = 32000
         fps = 24.0
         # Create two 1-second audio clips with high amplitude to test clamping
@@ -55,9 +55,16 @@ class AudioEnhancementsTests(unittest.TestCase):
         stitched = stitched_dict["waveform"]
         self.assertEqual(stitched.shape[0], 1)
         self.assertEqual(stitched.shape[1], 2)
-        # Verify clamp: no sample should exceed 1.0 or fall below -1.0
-        self.assertLessEqual(float(stitched.max()), 1.0)
-        self.assertGreaterEqual(float(stitched.min()), -1.0)
+        torch.testing.assert_close(stitched, torch.full_like(stitched, 0.9), atol=1e-7, rtol=0)
+
+    def test_identical_sine_overlap_preserves_waveform_and_timeline(self):
+        sr = 24000
+        signal = 0.95 * torch.sin(torch.arange(3000) * (2 * torch.pi * 440 / sr))
+        prev = {"waveform": signal[None, None, :2000], "sample_rate": sr}
+        curr = {"waveform": signal[None, None, 1000:], "sample_rate": sr}
+        result = stitch_audio_waveforms(prev, curr, curr_total_frames=2, trim_frames=1, fps=24, crossfade_ms=20)
+        self.assertEqual(result["waveform"].shape[-1], 3000)
+        torch.testing.assert_close(result["waveform"][0, 0], signal, atol=1e-7, rtol=0)
 
     def test_audio_handover_vs_full_previous_tail(self):
         # Source video with 65 latent steps (226 frames).

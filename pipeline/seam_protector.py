@@ -2,7 +2,7 @@
 
 Provides:
 1. Pixel-space video stitching with luminance matching and cosine S-curve crossfade (zero VAE artifacts).
-2. Waveform-space audio stitching with sample-accurate alignment and linear overlap crossfade (zero click/pop).
+2. Waveform-space audio stitching with sample-accurate alignment and complementary cosine crossfade.
 3. Synchronous frame & sample trimming for decoded IMAGE and AUDIO streams.
 4. Latent-space soft overlap blending (fallback / intermediate representation).
 """
@@ -193,7 +193,7 @@ def stitch_video_images(
 ) -> torch.Tensor:
     """Seamlessly joins two decoded video IMAGE tensors [F, H, W, 3] in pixel space.
 
-    Guarantees zero VAE artifacts, zero color distortion, and smooth seam transition.
+    Blends the overlap and optionally adjusts luminance at the start of the new body.
     """
     prev_images = _standardize_image_tensor(prev_images)
     curr_images = _standardize_image_tensor(curr_images)
@@ -316,10 +316,11 @@ def stitch_audio_waveforms(
         prev_tail = prev_w[..., -c:]
         curr_overlap = curr_w[..., head_samples - c : head_samples]
 
-        # Equal-power cosine crossfade (preserves acoustic energy and mitigates phase cancellation)
+        # Adjacent overlap usually contains the same sound. Complementary gains
+        # avoid the +3 dB peak of equal-power fades on correlated signals.
         t = torch.linspace(0.0, math.pi / 2, c, dtype=prev_w.dtype, device=prev_w.device)
-        fade_out = torch.cos(t)
-        fade_in = torch.sin(t)
+        fade_in = torch.sin(t).square()
+        fade_out = 1.0 - fade_in
         while fade_out.ndim < prev_w.ndim:
             fade_out = fade_out.unsqueeze(0)
             fade_in = fade_in.unsqueeze(0)
