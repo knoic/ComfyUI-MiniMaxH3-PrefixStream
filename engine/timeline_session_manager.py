@@ -917,7 +917,14 @@ class TimelineSession:
                     if prev_p and prev_p.get("frames") is not None and prev_p["frames"].shape[0] >= blend:
                         orig_left = prev_p["frames"][-blend:]
 
-                if orig_left is None:
+                if orig_left is None and prev_c_idx is not None:
+                    # Match the previous patch's time interval. Original source
+                    # frames cannot stand in for a completed edit if it is missing.
+                    if self.master_frames is not None and start_frame >= blend and self.master_frames.shape[0] >= start_frame:
+                        orig_left = self.master_frames[start_frame - blend:start_frame]
+                elif orig_left is None:
+                    # With no completed predecessor, fade from the current
+                    # chunk's original head into its newly edited head.
                     if self.master_frames is not None and self.master_frames.shape[0] >= start_frame + blend:
                         orig_left = self.master_frames[start_frame:start_frame + blend]
                     elif src_video and os.path.isfile(src_video):
@@ -954,8 +961,8 @@ class TimelineSession:
                     next_p = self.load_chunk_patch(next_c_idx, as_float=True)
                     if next_p and next_p.get("frames") is not None and next_p["frames"].shape[0] >= blend:
                         orig_right = next_p["frames"][:blend]
-                if orig_right is None and self.master_frames is not None and self.master_frames.shape[0] >= end_frame:
-                    orig_right = self.master_frames[end_frame - blend:end_frame]
+                if orig_right is None and self.master_frames is not None and self.master_frames.shape[0] >= end_frame + blend:
+                    orig_right = self.master_frames[end_frame:end_frame + blend]
 
                 if orig_right is not None and orig_right.shape[0] == blend:
                     t = torch.linspace(0.0, math.pi, blend, device="cpu", dtype=torch.float32)
