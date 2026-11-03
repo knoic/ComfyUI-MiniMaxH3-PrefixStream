@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import torch
+from .video_path_security import VIDEO_EXTENSIONS
 from .continuation_state import encode_state, decode_state
 try:
     import numpy as np
@@ -324,7 +325,6 @@ def create_side_by_side_preview(first_img: Image.Image, tail_img: Image.Image) -
     return composite
 
 
-VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".flv", ".gif")
 NON_VIDEO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".json", ".txt", ".safetensors")
 
 

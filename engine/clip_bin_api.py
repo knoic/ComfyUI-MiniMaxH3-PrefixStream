@@ -4,6 +4,7 @@ import os
 import json
 import logging
 import asyncio
+from .video_path_security import validate_video_path
 from urllib.parse import urlencode
 from typing import Dict, Any, List
 
@@ -315,7 +316,13 @@ def register_clip_bin_routes() -> None:
     @routes.get("/minimax/timeline/video_stream")
     async def handle_video_stream(request):
         file_path = request.rel_url.query.get("file", "").strip()
-        if not file_path or not os.path.isfile(file_path):
+        if not file_path:
+            return web.Response(status=404, text="Video file not found")
+        try:
+            file_path = validate_video_path(file_path)
+        except (ValueError, OSError, ImportError, AttributeError):
+            return web.Response(status=403, text="Access forbidden")
+        if not os.path.isfile(file_path):
             return web.Response(status=404, text="Video file not found")
         return web.FileResponse(file_path)
 

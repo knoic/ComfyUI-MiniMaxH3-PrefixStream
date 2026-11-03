@@ -17,6 +17,7 @@ import shutil
 import logging
 import threading
 import subprocess
+from .video_path_security import VIDEO_EXTENSIONS, validate_video_path
 from typing import Dict, Any, List, Optional, Tuple, Union
 
 import torch
@@ -43,7 +44,6 @@ _SESSION_CACHE: Dict[str, "TimelineSession"] = {}
 _SESSION_CACHE_LOCK = threading.RLock()
 _VIDEO_PROBE_CACHE: Dict[str, Dict[str, Any]] = {}
 
-VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".wmv", ".m4v")
 
 
 def get_ffmpeg_path() -> Optional[str]:
@@ -95,25 +95,34 @@ def get_input_video_files() -> List[str]:
     return sorted(files) if files else ["none"]
 
 
-def resolve_video_path(video_name_or_path: str) -> str:
-    """Resolves relative input path or absolute path to an existing video file."""
+def resolve_video_path(video_name_or_path: str, *, allow_external: bool = False) -> str:
+    """Resolve an existing video; external paths require explicit local-node opt-in."""
     if not video_name_or_path or video_name_or_path == "none":
         return ""
-    # Check absolute path
-    if os.path.isabs(video_name_or_path) and os.path.isfile(video_name_or_path):
-        return video_name_or_path
-    # Check inside ComfyUI input directory
+    if allow_external:
+        target = os.path.realpath(video_name_or_path)
+        if target.lower().endswith(VIDEO_EXTENSIONS) and os.path.isfile(target):
+            return target
     try:
         import folder_paths
         input_dir = folder_paths.get_input_directory()
-        cand = os.path.join(input_dir, video_name_or_path)
-        if os.path.isfile(cand):
-            return os.path.normpath(cand)
-    except Exception:
-        pass
-    # Local relative
-    if os.path.isfile(video_name_or_path):
-        return os.path.abspath(video_name_or_path)
+        candidates = [video_name_or_path] if os.path.isabs(video_name_or_path) else [
+            os.path.join(input_dir, video_name_or_path), video_name_or_path,
+        ]
+        for candidate in candidates:
+            try:
+                if allow_external:
+                    target = os.path.realpath(candidate)
+                    if not target.lower().endswith(VIDEO_EXTENSIONS):
+                        continue
+                else:
+                    target = validate_video_path(candidate)
+            except (ValueError, OSError):
+                continue
+            if os.path.isfile(target):
+                return target
+    except (ImportError, AttributeError, OSError, ValueError):
+        return ""
     return ""
 
 
@@ -138,7 +147,7 @@ def probe_video_info(video_path: str) -> Dict[str, Any]:
                 "-of", "json",
                 video_path
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace", check=True)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace", check=True, timeout=30)
             data = json.loads(res.stdout)
             streams = data.get("streams", [])
             for s in streams:
@@ -1355,7 +1364,9 @@ def slice_video_and_audio(
 ) -> Any:
     """Smart slicing supporting both direct lazy video file decoding and pre-loaded image tensors."""
     session = get_or_create_timeline_session(project_name)
-    resolved_video_path = resolve_video_path(video_file) if video_file else ""
+    # Local workflow nodes retain their explicit file-path input capability.
+    # HTTP handlers use the resolver's restricted default instead.
+    resolved_video_path = resolve_video_path(video_file, allow_external=True) if video_file else ""
 
     # Mode 1: Lazy direct video file loading (Zero RAM/VRAM explosion)
     if images is None and resolved_video_path:
