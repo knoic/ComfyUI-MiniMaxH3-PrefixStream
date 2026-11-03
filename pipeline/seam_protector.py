@@ -194,6 +194,7 @@ def stitch_video_images(
     """Seamlessly joins two decoded video IMAGE tensors [F, H, W, 3] in pixel space.
 
     Blends the overlap and optionally adjusts luminance at the start of the new body.
+    Current frames are resized to the previous clip's resolution before blending.
     """
     prev_images = _standardize_image_tensor(prev_images)
     curr_images = _standardize_image_tensor(curr_images)
@@ -207,6 +208,20 @@ def stitch_video_images(
 
     if prev_images is None or prev_images.shape[0] == 0:
         return curr_images[head:]
+
+    if prev_images.shape[-1] != curr_images.shape[-1]:
+        raise ValueError("Image channel counts must match before stitching")
+    curr_images = curr_images.to(device=prev_images.device)
+    if curr_images.shape[1:3] != prev_images.shape[1:3]:
+        # Resize both the overlap and body so luminance analysis and blending
+        # operate on the same spatial grid as the accumulated previous clip.
+        curr_images = F.interpolate(
+            curr_images.permute(0, 3, 1, 2).float(),
+            size=prev_images.shape[1:3], mode="bilinear", align_corners=False,
+        ).permute(0, 2, 3, 1)
+        if not prev_images.is_floating_point():
+            curr_images = curr_images.round()
+    curr_images = curr_images.to(dtype=prev_images.dtype)
 
     curr_body = curr_images[head:].to(prev_images.device, prev_images.dtype)
 

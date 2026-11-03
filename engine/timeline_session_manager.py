@@ -1737,13 +1737,8 @@ def export_master_to_video_file(
                 audio_np = wave_t.numpy()
                 audio_np = np.clip(audio_np, -1.0, 1.0)
                 audio_int16 = (audio_np * 32767.0).astype(np.int16)
-                if n_channels == 2:
-                    interleaved = np.empty((audio_int16.shape[1] * 2,), dtype=np.int16)
-                    interleaved[0::2] = audio_int16[0]
-                    interleaved[1::2] = audio_int16[1]
-                    pcm_bytes = interleaved.tobytes()
-                else:
-                    pcm_bytes = audio_int16[0].tobytes()
+                # WAV PCM is sample-major: all channels for sample 0, then 1...
+                pcm_bytes = audio_int16.T.astype("<i2").tobytes()
 
                 with wave.open(temp_wav, "wb") as wf:
                     wf.setnchannels(n_channels)
