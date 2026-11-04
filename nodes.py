@@ -596,6 +596,10 @@ class MiniMaxTrimPrefixLatentNode:
                 sr = int(normalized.get("sample_rate", 32000))
                 head = max(0, round(actual_trim_frames / fps * sr))
                 out_audio = dict(normalized, waveform=normalized["waveform"][..., head:])
+                if head > 0:
+                    out_audio.pop("minimax_audio_context", None)
+                    if head <= normalized["waveform"].shape[-1]:
+                        out_audio["minimax_audio_context"] = normalized["waveform"][..., :head]
 
         if actual_trim_frames > 0 and session is not None:
             session.is_current_clip_trimmed = True
@@ -679,7 +683,7 @@ class MiniMaxLongVideoStitcherNode:
                 }),
                 "crossfade_ms": ("FLOAT", {
                     "default": 15.0, "min": 0.0, "max": 500.0, "step": 1.0,
-                    "tooltip": "音频重叠区线性交叉淡化时长 (毫秒)，彻底消除接缝爆音 (Click/Pop)"
+                    "tooltip": "音频接缝余弦淡化时长（毫秒）。保留重叠上下文时交叉淡化，否则在接缝两侧淡出/淡入，保持音画时长。"
                 }),
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
             },
@@ -1367,7 +1371,17 @@ class MiniMaxSafeVAEDecodeAudioNode:
 
         try:
             audio = vae.decode(a)
-            audio = _standardize_audio_dict(audio)
+            if isinstance(audio, torch.Tensor):
+                # ComfyUI VAE.decode returns [batch, samples, channels].
+                # AUDIO consumers require [batch, channels, samples].
+                audio = audio.movedim(-1, 1)
+                std = torch.std(audio, dim=[1, 2], keepdim=True) * 5.0
+                audio = audio / std.clamp_min(1.0)
+                sr = samples.get("sample_rate", getattr(vae, "audio_sample_rate_output",
+                                 getattr(vae, "audio_sample_rate", 32000)))
+                audio = {"waveform": audio, "sample_rate": int(sr)}
+            else:
+                audio = _standardize_audio_dict(audio)
             return (audio,)
         except Exception as e:
             raise RuntimeError(f"Audio VAE decode failed for shape {getattr(a, 'shape', None)}") from e

@@ -167,7 +167,7 @@ def _standardize_audio_dict(audio: Any, default_sr: int = 32000) -> Optional[Dic
                 waveform = waveform.unsqueeze(0)
             elif waveform.ndim > 3:
                 waveform = waveform.view(1, waveform.shape[-2], waveform.shape[-1])
-            return {"waveform": waveform, "sample_rate": sr}
+            return dict(audio, waveform=waveform, sample_rate=sr)
         return audio
     if isinstance(audio, torch.Tensor):
         t = audio
@@ -269,7 +269,13 @@ def trim_images_and_audio(
             w = fit_audio_length(w, want_samples)
         else:
             w = waveform[..., head_samples:]
-        trimmed_audio = {"waveform": w, "sample_rate": sr}
+        trimmed_audio = dict(audio, waveform=w, sample_rate=sr)
+        if head_samples > 0:
+            # Keep the discarded context for downstream waveform stitching.
+            # The public waveform remains trimmed and safe to play/export.
+            trimmed_audio.pop("minimax_audio_context", None)
+            if head_samples <= waveform.shape[-1]:
+                trimmed_audio["minimax_audio_context"] = waveform[..., :head_samples]
 
     return trimmed_images, trimmed_audio
 
@@ -290,6 +296,7 @@ def stitch_audio_waveforms(
         return prev_audio
 
     sr = int(curr_audio.get("sample_rate", 32000))
+    trim_frames = max(0, int(trim_frames))
     head_samples = int(round(trim_frames / float(fps) * sr))
     kept_frames = max(0, curr_total_frames - trim_frames)
     want_samples = int(round(kept_frames / float(fps) * sr))
@@ -307,14 +314,30 @@ def stitch_audio_waveforms(
         raise ValueError("Audio batch size and channel count must match before stitching")
     curr_w = curr_w.to(device=prev_w.device, dtype=prev_w.dtype)
     curr_body = curr_body.to(device=prev_w.device, dtype=prev_w.dtype)
-    c = min(int(round((crossfade_ms / 1000.0) * sr)), head_samples, prev_w.shape[-1])
-    if head_samples > curr_w.shape[-1]:
-        c = 0
+    context = curr_w[..., :head_samples] if 0 < head_samples <= curr_w.shape[-1] else None
+    if head_samples == 0:
+        context = curr_audio.get("minimax_audio_context")
+    fade_samples = max(0, int(round((crossfade_ms / 1000.0) * sr)))
+    c = min(fade_samples, context.shape[-1], prev_w.shape[-1]) if context is not None else 0
+    if want_samples == 0:
+        return {"waveform": prev_w, "sample_rate": sr}
     if c <= 0:
+        # Already-trimmed external audio has no shared context. Fade through
+        # zero on both sides instead of shortening the AV timeline by overlap.
+        c = min(fade_samples, prev_w.shape[-1], curr_body.shape[-1])
+        if c > 0:
+            fade = 0.5 - 0.5 * torch.cos(torch.linspace(
+                0.0, math.pi, c, device=prev_w.device, dtype=prev_w.dtype))
+            if c == 1:
+                fade = torch.ones_like(fade)
+            prev_w = prev_w.clone()
+            curr_body = curr_body.clone()
+            prev_w[..., -c:] *= 1.0 - fade
+            curr_body[..., :c] *= (1.0 - fade).flip(-1)
         stitched = torch.cat([prev_w, curr_body], dim=-1)
     else:
         prev_tail = prev_w[..., -c:]
-        curr_overlap = curr_w[..., head_samples - c : head_samples]
+        curr_overlap = context[..., -c:].to(device=prev_w.device, dtype=prev_w.dtype)
 
         # Adjacent overlap usually contains the same sound. Complementary gains
         # avoid the +3 dB peak of equal-power fades on correlated signals.
@@ -328,7 +351,6 @@ def stitch_audio_waveforms(
 
         stitched = torch.cat([prev_w[..., :-c], blended, curr_body], dim=-1)
 
-    stitched = torch.clamp(stitched, -1.0, 1.0)
     return {"waveform": stitched, "sample_rate": sr}
 
 

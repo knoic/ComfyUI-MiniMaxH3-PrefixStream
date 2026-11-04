@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 import torch
 
 _repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,11 +13,77 @@ if _repo_dir not in sys.path:
 from engine.cache_manager import KVCacheConfig
 from pipeline.long_video_director import LongVideoSession
 from pipeline.native_masked_av import apply_native_masked_av, masked_av_tail_slice
-from pipeline.seam_protector import fit_audio_length, stitch_audio_waveforms
+from pipeline.seam_protector import fit_audio_length, stitch_audio_waveforms, trim_images_and_audio
 import nodes
 
 
 class AudioEnhancementsTests(unittest.TestCase):
+    def test_safe_decoder_converts_comfy_vae_layout_and_sample_rate(self):
+        raw = torch.stack((torch.linspace(-0.1, 0.1, 4800),
+                           torch.linspace(0.1, -0.1, 4800)), dim=-1)[None]
+        vae = SimpleNamespace(decode=lambda _: raw, audio_sample_rate=32000,
+                              audio_sample_rate_output=48000)
+        audio, = nodes.MiniMaxSafeVAEDecodeAudioNode().decode(
+            vae, {"samples": torch.zeros(1, 32, 2, 4)})
+        self.assertEqual(audio["sample_rate"], 48000)
+        self.assertEqual(audio["waveform"].shape, (1, 2, 4800))
+        torch.testing.assert_close(audio["waveform"], raw.movedim(-1, 1))
+
+    def test_trim_then_stitch_matches_direct_stitch(self):
+        sr = 24000
+        signal = 0.8 * torch.sin(torch.arange(3000) * (2 * torch.pi * 440 / sr))
+        prev = {"waveform": signal[None, None, :2000], "sample_rate": sr}
+        # Deliberately different decoded overlap: a hard join would pop.
+        curr = {"waveform": -signal[None, None, 1000:], "sample_rate": sr}
+        images = torch.zeros(2, 2, 2, 3)
+        direct = stitch_audio_waveforms(prev, curr, 2, trim_frames=1)
+        trimmed_images, trimmed = trim_images_and_audio(images, curr, 1)
+        joined = stitch_audio_waveforms(prev, trimmed, len(trimmed_images), trim_frames=0)
+        torch.testing.assert_close(joined["waveform"], direct["waveform"])
+        self.assertEqual(joined["waveform"].shape[-1], 3000)
+        self.assertNotIn("minimax_audio_context", joined)
+        # The samples at the handover must be consecutive samples of curr.
+        torch.testing.assert_close(joined["waveform"][..., 1999:2001], curr["waveform"][..., 999:1001])
+
+    def test_contextless_join_declicks_without_shortening_or_mutating_inputs(self):
+        prev = {"waveform": torch.full((1, 2, 2000), 0.8), "sample_rate": 24000}
+        curr = {"waveform": torch.full((1, 2, 1000), -0.8), "sample_rate": 24000}
+        result = stitch_audio_waveforms(prev, curr, 1, trim_frames=0)["waveform"]
+        self.assertEqual(result.shape[-1], 3000)
+        torch.testing.assert_close(result[..., 1999:2001], torch.zeros(1, 2, 2))
+        self.assertLess(float(torch.diff(result).abs().max()), 0.01)
+        self.assertTrue(torch.all(prev["waveform"] == 0.8))
+        self.assertTrue(torch.all(curr["waveform"] == -0.8))
+        torch.testing.assert_close(result[..., 2360:], curr["waveform"][..., 360:])
+
+    def test_trim_and_stitch_nodes_keep_audio_context_with_session(self):
+        prev_images = torch.zeros(2, 2, 2, 3)
+        curr_images = torch.zeros(2, 2, 2, 3)
+        prev = {"waveform": torch.full((1, 2, 2000), 0.8), "sample_rate": 24000}
+        curr = {"waveform": torch.full((1, 2, 2000), -0.8), "sample_rate": 24000}
+        for with_images in (False, True):
+            with self.subTest(with_images=with_images):
+                session = LongVideoSession(KVCacheConfig())
+                session.last_rolling_frames = 1
+                images, audio, _ = nodes.MiniMaxTrimPrefixLatentNode().trim(
+                    audio=curr, images=curr_images if with_images else None, session=session)
+                images = images if with_images else curr_images[1:]
+                out_images, out_audio, count = nodes.MiniMaxLongVideoStitcherNode().stitch(
+                    prev_images=prev_images, curr_images=images, prev_audio=prev,
+                    curr_audio=audio, session=session)
+                self.assertEqual(count, 3)
+                self.assertEqual(out_audio["waveform"].shape[-1], 3000)
+                torch.testing.assert_close(out_audio["waveform"][..., 1999:2001],
+                                           torch.full((1, 2, 2), -0.8))
+
+    def test_stitch_does_not_clip_unrelated_audio_or_change_empty_join(self):
+        prev = {"waveform": torch.full((1, 1, 2000), 1.2), "sample_rate": 24000}
+        curr = {"waveform": torch.full((1, 1, 1000), 1.2), "sample_rate": 24000}
+        result = stitch_audio_waveforms(prev, curr, 1, trim_frames=0)
+        torch.testing.assert_close(result["waveform"][..., :1000], prev["waveform"][..., :1000])
+        empty = stitch_audio_waveforms(prev, curr, 1, trim_frames=1)
+        torch.testing.assert_close(empty["waveform"], prev["waveform"])
+
     def test_fit_audio_length_no_dc_plateau(self):
         # A waveform ending at non-zero amplitude 0.8
         w = torch.ones(1, 2, 100) * 0.8
