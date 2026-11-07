@@ -24,6 +24,43 @@ from pipeline.long_video_director import LongVideoSession
 
 
 class NativeMaskedAVTests(unittest.TestCase):
+    def test_native_audio_guide_uses_source_context_without_freezing_target_audio(self):
+        video = torch.randn(1, 24, 52, 2, 2)
+        audio = torch.randn(1, 32, 2, 292)
+        target_audio = torch.randn_like(audio)
+        source = nodes.pack_av_latent(video, audio)
+        target = nodes.pack_av_latent(torch.zeros_like(video), target_audio)
+        cfg, = nodes.MiniMaxPrefixCacheConfigNode().create_config(
+            continuation_frames="22", audio_continuation_mode="Native Audio Guide",
+            audio_feather_ticks=4)
+        embedding = torch.zeros(1)
+        cond = [[embedding, {"minimax_keyframes": [
+            {"resolved_frame_index": 0, "latent": torch.ones(1, 24, 1, 2, 2)},
+            {"resolved_frame_index": 174, "latent": torch.ones(1, 24, 1, 2, 2)}]}]]
+        with mock.patch.object(nodes, "_require_native_masked_av_support"):
+            _, out_cond, session, masked = nodes.MiniMaxPrefixCacheApplierNode().apply_cache(
+                object(), cond, cfg, source, target)
+        _, out_audio = nodes._unpack_latent(masked)
+        vm, am = nodes._unpack_latent({"samples": masked["noise_mask"]})
+        self.assertTrue(torch.equal(out_audio, target_audio))
+        self.assertTrue(torch.all(am == 1))
+        self.assertTrue(torch.all(vm[:, :, :7] == 0))
+        self.assertTrue(torch.all(vm[:, :, 7:] == 1))
+        self.assertEqual(session.last_rolling_frames, 22)
+        guides = out_cond[0][1]["minimax_keyframes"]
+        self.assertEqual(len(guides), 2)
+        self.assertEqual(guides[0]["resolved_frame_index"], 174)
+        self.assertEqual(guides[1]["resolved_frame_index"], 0)
+        torch.testing.assert_close(guides[1]["audio_latent"], audio[..., -37:])
+        self.assertNotEqual(guides[1]["audio_latent"].data_ptr(), audio[..., -37:].data_ptr())
+        # Reusing returned conditioning must replace the prior head guide.
+        with mock.patch.object(nodes, "_require_native_masked_av_support"):
+            _, repeated, _, _ = nodes.MiniMaxPrefixCacheApplierNode().apply_cache(
+                object(), out_cond, cfg, source, target)
+        self.assertEqual(len(repeated[0][1]["minimax_keyframes"]), 2)
+        self.assertEqual(len(cond[0][1]["minimax_keyframes"]), 2)
+        torch.testing.assert_close(nodes._unpack_latent(source)[1], audio)
+
     def test_all_native_images_survive_missing_references_without_growth(self):
         refs = [{"kind": "image", "latent": torch.randn(1, 24, 1, 2, 2), "latent_h": 2, "latent_w": 2}
                 for _ in range(3)]

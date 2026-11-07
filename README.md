@@ -86,6 +86,10 @@
 
 ---
 
+## 音频接续模式
+
+Continuation Config 的 `audio_continuation_mode` 默认为 `Masked Prefix`，保留原有音频前缀冻结方式。若接续段生成的音频持续失真，可对照测试 `Native Audio Guide`：它把同一段历史音频送入 H3 原生音频引导条件，仅冻结视频前缀，音频正常生成。该模式忽略 `audio_feather_ticks`，仍需裁掉重叠前缀；生成的重叠音频不会与原段逐样本相同。当前仅验证了条件、遮罩和时序传递，尚未验证真实生成听感。
+
 ## 安装
 
 将仓库克隆到 ComfyUI 的 `custom_nodes` 目录：

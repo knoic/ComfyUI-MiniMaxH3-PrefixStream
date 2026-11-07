@@ -72,6 +72,7 @@ class KVCacheConfig:
     audio_feather_ticks: int = 0                       # 0 preserves the full inherited audio prefix
     video_context_denoise: float = 0.0                 # Experimental native prefix refinement; 0 keeps the exact prefix
     reference_noise: bool = False                     # Cosine pixel noise with a clean terminal H3 unit
+    audio_continuation_mode: str = "Masked Prefix"     # Or native clean audio-guide conditioning
 
     # Internal overrides / compatibility
     _rolling_latent_frames: Optional[int] = None

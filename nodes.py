@@ -166,7 +166,7 @@ class MiniMaxPrefixCacheConfigNode:
                 }),
                 "audio_feather_ticks": ("INT", {
                     "default": 0, "min": 0, "max": 16, "step": 1,
-                    "tooltip": "音频前缀末尾允许重新生成的 tick 数。0 完全保护；大于 0 会释放部分音频，可能改变交接声音。开启 reference_noise 时强制为 0。"
+                    "tooltip": "仅 Masked Prefix 模式生效：音频前缀末尾允许重新生成的 tick 数。0 完全保护；大于 0 会释放部分音频，可能改变交接声音。开启 reference_noise 时强制为 0。"
                 }),
                 "video_context_denoise": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
@@ -174,7 +174,11 @@ class MiniMaxPrefixCacheConfigNode:
                 }),
                 "reference_noise": ("BOOLEAN", {
                     "default": False, "label_on": "开启", "label_off": "关闭",
-                    "tooltip": "参考帧渐变注噪：所有档位均从 0.4 平滑降至末帧 0。使用带噪/干净两次 VAE 编码的差值作用于原始 latent，避免直接替换造成额外编码偏差。音频前缀硬保护。需接视频 vae 和上一段完整 latent；仅支持 Native Masked AV。"
+                    "tooltip": "参考帧渐变注噪：所有档位均从 0.4 平滑降至末帧 0。使用带噪/干净两次 VAE 编码的差值作用于原始 latent，避免直接替换造成额外编码偏差。继承的音频不注噪。需接视频 vae 和上一段完整 latent；仅支持 Native Masked AV。"
+                }),
+                "audio_continuation_mode": (["Masked Prefix", "Native Audio Guide"], {
+                    "default": "Masked Prefix",
+                    "tooltip": "Masked Prefix 冻结目标音频前缀；Native Audio Guide 通过 H3 原生音频引导条件继承前段声音，目标音频正常生成，不使用音频冻结或 feather。实验选项，需对照验证听感。"
                 }),
             }
         }
@@ -192,6 +196,7 @@ class MiniMaxPrefixCacheConfigNode:
         audio_feather_ticks: int = 0,
         video_context_denoise: float = 0.0,
         reference_noise: bool = False,
+        audio_continuation_mode: str = "Masked Prefix",
         **kwargs
     ) -> Tuple[KVCacheConfig]:
         # Accept a saved legacy rolling_frames value if an old workflow sends it.
@@ -208,6 +213,7 @@ class MiniMaxPrefixCacheConfigNode:
             audio_feather_ticks=int(audio_feather_ticks),
             video_context_denoise=float(video_context_denoise),
             reference_noise=bool(reference_noise),
+            audio_continuation_mode=audio_continuation_mode,
         )
         return (config,)
 
@@ -488,18 +494,35 @@ class MiniMaxPrefixCacheApplierNode:
             if cfg.reference_noise:
                 prefix = encode_noisy_prefix(vae, v_ctx, plan)
                 out_v[:, :, :plan["context_steps"]] = prefix.to(out_v)
-                logger.info("Reference noise: %d frames, cosine 0.4 to final pixel frame 0, paired-encode delta and hard audio prefix.",
+                logger.info("Reference noise: %d frames, cosine 0.4 to final pixel frame 0, paired-encode delta; inherited audio unchanged.",
                             plan["actual_context_frames"])
+            out_cond = _drop_head_keyframes(conditioning, int(plan["actual_context_frames"]))
+            if cfg.audio_continuation_mode == "Native Audio Guide":
+                # Use the same native condition consumed by MiniMaxH3AddGuide.
+                # Freeze only video: audio rows keep their stream timestep.
+                guide = a_ctx_from_latent[..., plan["audio_start_tick"]:plan["audio_end_tick"]].clone()
+                out_a = target_audio.clone()
+                audio_mask = torch.ones_like(audio_mask)
+                guided = []
+                for embedding, extra in out_cond:
+                    updated = dict(extra)
+                    updated["minimax_keyframes"] = list(updated.get("minimax_keyframes") or []) + [
+                        {"resolved_frame_index": 0, "audio_latent": guide}
+                    ]
+                    guided.append([embedding, updated])
+                out_cond = guided
+                logger.info("[Native Audio Guide] Conditioning on %d inherited audio ticks; target audio is generated normally.",
+                            plan["audio_steps"])
             masked_latent = pack_av_latent(out_v, out_a, target_latent)
             masked_latent["noise_mask"] = _pack_nested_streams(video_mask, audio_mask)
             masked_latent["minimax_prefix_frames"] = int(plan["actual_context_frames"])
             sess.last_rolling_steps = int(plan["context_steps"])
             sess.last_rolling_frames = int(plan["actual_context_frames"])
-            out_cond = _drop_head_keyframes(conditioning, sess.last_rolling_frames)
             logger.info(
-                "[Native Masked AV] Protected %d video frames/%d audio ticks; source latent %d:%d.",
+                "[Native Masked AV] Protected %d video frames; audio context %d ticks (%s); source latent %d:%d.",
                 sess.last_rolling_frames,
                 plan["audio_steps"],
+                cfg.audio_continuation_mode,
                 plan["start_t"],
                 plan["end_t"],
             )
