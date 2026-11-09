@@ -18,6 +18,24 @@ import nodes
 
 
 class AudioEnhancementsTests(unittest.TestCase):
+    def test_stitch_preserves_continuation_body_samples(self):
+        # A join must not filter, normalize or resample the generated body.
+        sr = 32000
+        frames = 72
+        count = frames * sr // 24
+        t = torch.arange(count) / sr
+        waveform = torch.stack((0.2 * torch.sin(2 * torch.pi * 8000 * t),
+                                0.3 * torch.sin(2 * torch.pi * 13000 * t)))[None]
+        current = {"waveform": waveform, "sample_rate": sr}
+        previous = {"waveform": waveform.clone(), "sample_rate": sr}
+        for prefix in (5, 39):
+            with self.subTest(prefix=prefix):
+                result = stitch_audio_waveforms(previous, current, frames, trim_frames=prefix)
+                head = round(prefix * sr / 24)
+                body = result["waveform"][..., count:]
+                self.assertTrue(torch.equal(body, waveform[..., head:head + body.shape[-1]]))
+                self.assertEqual(result["sample_rate"], sr)
+
     def test_safe_decoder_converts_comfy_vae_layout_and_sample_rate(self):
         raw = torch.stack((torch.linspace(-0.1, 0.1, 4800),
                            torch.linspace(0.1, -0.1, 4800)), dim=-1)[None]

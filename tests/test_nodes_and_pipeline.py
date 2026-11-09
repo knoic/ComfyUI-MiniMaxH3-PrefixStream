@@ -35,7 +35,8 @@ class TestNodesAndPipeline(unittest.TestCase):
             "Safe Native (Fallback)",
         ])
         self.assertIn("22", frame_choices)
-        self.assertEqual([int(f) for f in frame_choices], list(range(5, 193, 17)))
+        self.assertEqual(frame_choices[0], "39")
+        self.assertEqual(sorted(int(f) for f in frame_choices), list(range(5, 193, 17)))
         (cfg,) = cfg_node.create_config(
             cache_mode="Native Masked AV (Recommended)",
             continuation_frames="39",

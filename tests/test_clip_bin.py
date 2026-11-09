@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import types
 import unittest
+from unittest import mock
 import torch
 
 _repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +35,19 @@ def setup_temp_folder_paths():
 
 
 class TestClipBin(unittest.TestCase):
+    def test_explicit_root_in_auto_ignores_existing_clips(self):
+        for picker_class in (nodes.MiniMaxClipBinPickerNode, nodes.MiniMaxClipBinTreePickerNode):
+            with self.subTest(picker=picker_class.__name__), mock.patch.object(
+                nodes, "load_project_index", return_value={"clips": [{"clip_id": "existing"}]}
+            ), mock.patch.object(nodes, "load_clip_asset") as load:
+                result = picker_class().pick_clip(clip_selection="initial")["result"]
+                self.assertIsNone(result[0])
+                self.assertEqual(result[3:], ("", "[INITIAL_GENERATION]"))
+                load.assert_not_called()
+                with self.assertRaisesRegex(ValueError, "Strict Chaining requires a clip"):
+                    picker_class().pick_clip(clip_selection="initial", mode="Strict Chaining")
+                load.assert_not_called()
+
     def test_clip_bin_saver_and_picker_with_images(self):
         temp_dir = setup_temp_folder_paths()
         try:

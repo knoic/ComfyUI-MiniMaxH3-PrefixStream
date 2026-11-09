@@ -264,6 +264,10 @@ class NativeMaskedAVTests(unittest.TestCase):
         self.assertEqual(delivered.shape[2], 35)
 
     def test_default_mode_and_exact_context_grid(self):
+        options, metadata = nodes.MiniMaxPrefixCacheConfigNode.INPUT_TYPES()["required"]["continuation_frames"]
+        self.assertEqual(options[0], "39")
+        self.assertEqual(metadata["default"], "39")
+        self.assertEqual(nodes.MiniMaxPrefixCacheConfigNode().create_config()[0].rolling_frames, 39)
         cfg = KVCacheConfig()
         self.assertTrue(cfg.is_native_masked_av_mode())
         self.assertEqual(cfg.rolling_frames, 39)

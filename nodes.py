@@ -151,9 +151,9 @@ class MiniMaxPrefixCacheConfigNode:
                     "default": "Native Masked AV (Recommended)",
                     "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 是短片段或旧工作流的兼容备选。"
                 }),
-                "continuation_frames": (["5", "22", "39", "56", "73", "90", "107", "124", "141", "158", "175", "192"], {
+                "continuation_frames": (["39", "5", "22", "56", "73", "90", "107", "124", "141", "158", "175", "192"], {
                     "default": "39",
-                    "tooltip": "按 H3 的 17k+5 帧网格复制并冻结前缀。22 帧对应参考工作流的 7 个视频 latent / 37 个音频 tick；39 帧对应 12 / 65。"
+                    "tooltip": "推荐默认 39 帧：1.625 秒 / 65 个音频 tick，音画时长精确对齐。5 帧仅约 0.208 秒 / 8 个 tick，音频上下文很短且需取整，声音接续可能不稳定。按 H3 的 17k+5 帧网格复制前缀。"
                 }),
             },
             "optional": {
@@ -1182,7 +1182,7 @@ class MiniMaxClipBinPickerNode:
                 }),
                 "clip_selection": ("STRING", {
                     "default": "latest",
-                    "tooltip": "【镜头定位】\n• 填 'latest'（默认）：自动调取最新生成的优质镜头进行无缝接续\n• 填 clip_id（如 clip_20260908...）：精确跳转或回溯到指定的历史镜头开启新分支\n• 填 shot 名称：按镜头标签名称匹配"
+                    "tooltip": "【镜头定位】\n• 填 'latest'（默认）：自动调取最新生成的优质镜头进行无缝接续\n• 填 'initial'（树根节点）：Auto 模式下全新生成，无历史上下文\n• 填 clip_id（如 clip_20260908...）：精确跳转或回溯到指定的历史镜头开启新分支\n• 填 shot 名称：按镜头标签名称匹配"
                 }),
             },
             "optional": {
@@ -1227,8 +1227,13 @@ class MiniMaxClipBinPickerNode:
             idx = load_project_index(p_name)
             clips = idx.get("clips", [])
 
-            # Check if Initial Mode applies (Auto with empty bin, or Force Initial)
-            is_initial_mode = mode.startswith("Force Initial") or (mode.startswith("Auto") and len(clips) == 0)
+            # Explicit root selection must not resolve to the latest saved clip.
+            selected_initial = (clip_selection or "").strip().lower() == "initial"
+            if selected_initial and mode.startswith("Strict Chaining"):
+                raise ValueError("Strict Chaining requires a clip; choose Auto or Force Initial to generate a new root.")
+            is_initial_mode = mode.startswith("Force Initial") or (
+                mode.startswith("Auto") and (selected_initial or not clips)
+            )
 
             if is_initial_mode:
                 logger.info("[Clip Bin Picker] Operating in Initial Generation mode for project '%s' (Zero prior context).", p_name)

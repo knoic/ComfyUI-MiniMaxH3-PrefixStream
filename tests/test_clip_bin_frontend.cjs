@@ -72,6 +72,10 @@ class Element {
     }
     assert.ok(htmlWrites.some(value => value.includes('&lt;img')), 'hostile text remains visible as text');
     assert.equal(context.pwned, undefined);
+    const initialCard = elements.find(e => e.className?.includes('initial-card'));
+    initialCard.onclick();
+    assert.equal(node.widgets.find(w => w.name === 'clip_selection').value, 'initial');
+    await drainTimers();
     assert.equal(listeners.size, 2);
     node.onRemoved();
     await drainTimers();
@@ -86,6 +90,13 @@ class Element {
     await drainTimers();
     assert.ok(elements.some(e => e.className && e.className.includes('minimax-tree-auto-node')), 'tree renders auto root');
     assert.ok(elements.some(e => e.className && e.className.includes('minimax-tree-node')), 'tree renders clip node');
+    const modeNodes = elements.filter(e => e.className?.includes('minimax-tree-auto-node'));
+    modeNodes[0].onclick();
+    assert.equal(treeNode.widgets.find(w => w.name === 'clip_selection').value, 'initial', 'root starts without context');
+    await drainTimers();
+    modeNodes[1].onclick();
+    assert.equal(treeNode.widgets.find(w => w.name === 'clip_selection').value, 'latest', 'latest stays available separately');
+    await drainTimers();
     for (const value of htmlWrites) {
         assert.ok(!value.includes('<img'), 'metadata in tree must never become an HTML image element');
         assert.ok(!value.includes(hostile), 'metadata in tree must be escaped in every HTML sink');

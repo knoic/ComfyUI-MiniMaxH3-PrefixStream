@@ -481,7 +481,7 @@ function setupClipBinPickerWidget(node) {
     function renderDeck(filteredClips, currentSelection, currentProject) {
         deck.innerHTML = "";
 
-        // 1. Always append "Auto / Initial" Special Card
+        // Latest and a context-free root are distinct selections.
         const autoCard = document.createElement("div");
         const isAutoActive = currentSelection.toLowerCase() === "latest" || currentSelection.toLowerCase() === "auto" || currentSelection === "";
         autoCard.className = `minimax-clip-card auto-card ${isAutoActive ? "active" : ""}`;
@@ -507,6 +507,19 @@ function setupClipBinPickerWidget(node) {
             loadClips();
         };
         deck.appendChild(autoCard);
+
+        const initialCard = document.createElement("div");
+        initialCard.className = "minimax-clip-card initial-card" + (currentSelection.toLowerCase() === "initial" ? " active" : "");
+        initialCard.innerHTML = `<div class="minimax-clip-body"><div class="minimax-clip-shot-name">✨ 全新首段</div><div class="minimax-clip-lineage">无历史上下文（Auto 模式）</div></div>`;
+        initialCard.onclick = () => {
+            if (selectionWidget) {
+                selectionWidget.value = "initial";
+                selectionWidget.callback?.(selectionWidget.value);
+            }
+            updateSelectionDisplay("initial");
+            loadClips();
+        };
+        deck.appendChild(initialCard);
 
         if (filteredClips.length === 0) {
             const emptyMsg = document.createElement("div");
@@ -697,14 +710,6 @@ function setupClipBinPickerWidget(node) {
     function renderTree(filteredClips, currentSelection, currentProject) {
         treeContainer.innerHTML = "";
 
-        if (filteredClips.length === 0) {
-            const emptyMsg = document.createElement("div");
-            emptyMsg.style.cssText = "padding: 30px 10px; color: #64748b; font-size: 11px;";
-            emptyMsg.innerText = "素材库暂无片段，执行生成后将自动构建血缘拓扑树...";
-            treeContainer.appendChild(emptyMsg);
-            return;
-        }
-
         // Build Forest
         const clipMap = new Map();
         const roots = [];
@@ -753,24 +758,28 @@ function setupClipBinPickerWidget(node) {
         const rootRow = document.createElement("div");
         rootRow.className = "minimax-tree-root-row";
 
-        // Auto / Initial Virtual Card
-        const isAutoActive = currentSelection.toLowerCase() === "latest" || currentSelection.toLowerCase() === "auto" || currentSelection === "";
-        const autoNode = document.createElement("div");
-        autoNode.className = "minimax-tree-auto-node" + (isAutoActive ? " active-relay" : "");
-        autoNode.innerHTML = `
-            <div class="minimax-tree-auto-icon">⚡</div>
-            <div class="minimax-tree-auto-title">Auto 初始镜头</div>
-            <div class="minimax-tree-auto-desc">${isAutoActive ? "🎯 当前接力源" : "点击设为首段全新"}</div>
-        `;
-        autoNode.onclick = () => {
-            if (selectionWidget) {
-                selectionWidget.value = "latest";
-                selectionWidget.callback?.(selectionWidget.value);
-            }
-            updateSelectionDisplay("latest");
-            loadClips();
-        };
-        rootRow.appendChild(autoNode);
+        // The virtual root always starts a new clip; latest remains a separate control.
+        for (const [selection, title, description] of [
+            ["initial", "✨ 全新首段（根节点）", "无历史上下文（Auto 模式）"],
+            ["latest", "⚡ Auto / 自动最新", "自动接续最新镜头"],
+        ]) {
+            const normalized = currentSelection.toLowerCase();
+            const active = selection === "initial" ? normalized === "initial"
+                : ["latest", "auto", "", "0", "default"].includes(normalized);
+            const modeNode = document.createElement("div");
+            modeNode.className = "minimax-tree-auto-node" + (active ? " active-relay" : "");
+            modeNode.innerHTML = `<div class="minimax-tree-auto-title">${title}</div>
+                <div class="minimax-tree-auto-desc">${active ? "🎯 已选中 | " : ""}${description}</div>`;
+            modeNode.onclick = () => {
+                if (selectionWidget) {
+                    selectionWidget.value = selection;
+                    selectionWidget.callback?.(selectionWidget.value);
+                }
+                updateSelectionDisplay(selection);
+                loadClips();
+            };
+            rootRow.appendChild(modeNode);
+        }
 
         // Recursive Branch Builder
         function buildBranchDOM(nodeItem) {
